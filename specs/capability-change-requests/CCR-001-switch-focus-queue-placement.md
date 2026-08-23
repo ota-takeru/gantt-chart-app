@@ -1,0 +1,11 @@
+# Capability Change Request: CCR-001-switch-focus-queue-placement
+
+- Affected capability/version: `focus-work-lifecycle` 1.0 and `next-queue-ordering` 1.0
+- Why the locked contract is insufficient: `switchFocus` atomically changes the old active task to paused and therefore requires a queue entry, but the locked input does not say where that task is inserted. The headless implementation currently appends it to the end as an implementation choice. Independent UI exploration showed that the user needs a predictable placement result, and some structural directions need to preview that result before committing the switch.
+- Proposed semantic change: Add an optional `fromQueuePlacement` to `switchFocus`. It uses the existing relative placement vocabulary (`beforeTaskId` or `end`). Omission means `end`, preserving the current implementation and compatibility. The source task is inserted at that placement in the same transaction that closes its session, pauses it, removes the target from the queue, starts the target, and opens the target session.
+- Affected scenarios/states/errors/invariants: Extend focus lifecycle S3 and next queue S4 to cover the switched-from task's relative placement. Apply `anchor-not-found`, `self-anchor`, stale queue revision, and no-partial-application behavior to the full switch transaction. Single-active and queue-membership invariants remain unchanged.
+- Existing and new tests: Existing switch and queue tests remain. Add default-end compatibility, explicit-before placement, invalid/stale anchor full rollback, and source/target identity negative tests.
+- Compatibility or migration impact: No SQLite schema migration. Additive optional Tauri command input and Rust application input; existing callers that omit the field retain append-to-end behavior. Queue revision still increments once for the atomic switch.
+- Requested authorization: Approve `fromQueuePlacement?: { beforeTaskId?: TaskId }` on `switchFocus`, with omission defined as queue end, and authorize successor capability version 1.1 plus matching implementation/tests.
+- Authorization: approved by product owner on 2026-08-23; proceed with the recommended Direction A.
+- Implementation: complete; successor capabilities 1.1 locked after 28 total contract tests passed.

@@ -1,0 +1,33 @@
+node_modules/
+dist/
+
+# Generated visual QA and local test artifacts
+output/
+playwright-report/
+test-results/
+visual-qa/
+
+# Tauri build output
+src-tauri/target/
+src-tauri/gen/
+src-tauri/bundle/
+
+# Copied installer artifacts
+*.msi
+*.exe
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local browser automation state
+.playwright-cli/

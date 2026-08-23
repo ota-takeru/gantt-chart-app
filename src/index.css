@@ -1,0 +1,720 @@
+:root {
+  font-family: "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+  color-scheme: light;
+  color: var(--text);
+  background: var(--background);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  /* Semantic paint roles: the light values intentionally match the
+     established surface exactly.  Component aliases below keep existing
+     geometry and state rules readable while allowing one dark-mode swap. */
+  --background: #f4f6f2;
+  --surface: #fbfcfa;
+  --soft-surface: #eaf0eb;
+  --text: #1f2a2d;
+  --muted-text: #697679;
+  --lines: #d8dfda;
+  --accent: #2a6f68;
+  --accent-soft: #d8ebe5;
+  --completion: #7a8583;
+  --danger: #9c3e36;
+  --danger-soft: #fae5e0;
+  --focus: #e19c31;
+  --hover: #fff;
+  --selected: #f6fbf8;
+  --row-surface: rgba(251, 252, 250, .76);
+  --timeline-surface: rgba(247, 250, 247, .78);
+  --accent-surface: #edf7f2;
+  --open-surface: #e3f0eb;
+  --closed-surface: #dfe5e2;
+  --hinge-surface: #f0f5f1;
+  --placeholder: #8b9693;
+  --drag-handle: #82908d;
+  --completion-border: #98a8a2;
+  --active: #e29d31;
+  --active-ink: #b56e07;
+  --paused: #a0aca9;
+  --paused-ink: #64736f;
+  --queued: #4d8780;
+  --warning: #66552a;
+  --warning-border: #d9c99c;
+  --warning-surface: #fff9e6;
+  --pocket-line: #dfe7e2;
+  --pocket-member-text: #5b6866;
+  --pocket-caption-surface: rgba(234, 240, 235, .58);
+  --pocket-lane-surface: rgba(234, 240, 235, .24);
+  --drop-target: #85aaa1;
+  --drop-target-shadow: rgba(133, 170, 161, .25);
+  --danger-shadow: rgba(156, 62, 54, .2);
+  --active-shadow: rgba(226, 157, 49, .24);
+  --selected-mark: #edf7f2;
+  --selected-hinge: #e6f1ed;
+  --selected-identity: rgba(237, 247, 242, .72);
+  --selected-border: transparent;
+  --surface-shadow: rgba(31, 42, 45, .18);
+  --landing-shadow: rgba(31, 42, 45, .12);
+  --on-accent: #fff;
+
+  /* Compatibility aliases for the existing low-ink rules. */
+  --ink: var(--text);
+  --muted: var(--muted-text);
+  --line: var(--lines);
+  --soft: var(--soft-surface);
+  --paper: var(--surface);
+  --complete: var(--completion);
+  --duration-fast: 120ms;
+  --duration-standard: 180ms;
+  --duration-emphasized: 260ms;
+  --ease-exit: cubic-bezier(.4, 0, 1, 1);
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0, 0, .2, 1);
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--background); }
+
+button, input, select { font: inherit; color: var(--text); }
+button { color: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+button:disabled { cursor: not-allowed; opacity: .52; }
+
+.app-shell { min-height: 100vh; }
+.work-surface { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 16px 0 64px; }
+
+.preview-strip { margin: 0 0 10px; padding: 6px 10px; border: 1px solid var(--warning-border); background: var(--warning-surface); color: var(--warning); font-size: 12px; }
+
+.compact-topline { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-height: 48px; padding: 6px 0 12px; border-bottom: 1px solid var(--ink); }
+.now-label { display: flex; align-items: baseline; gap: 8px; min-width: 195px; }
+.now-kicker { color: var(--accent); font-size: 20px; font-weight: 800; letter-spacing: .13em; }
+.now-count { min-width: 1.7em; color: var(--muted); font-size: 16px; font-variant-numeric: tabular-nums; }
+.now-caption { color: var(--muted); font-size: 12px; }
+.top-create { display: flex; align-items: center; gap: 6px; flex: 1 1 250px; min-width: 220px; max-width: 520px; }
+.top-create label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.top-create input { width: 100%; min-height: 34px; padding: 6px 10px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+.top-create input::placeholder { color: var(--placeholder); }
+.top-create button { width: 34px; min-height: 34px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); font-size: 22px; line-height: 1; cursor: pointer; }
+.top-action { min-height: 32px; border: 1px solid var(--line); background: transparent; padding: 5px 9px; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.top-action:hover { border-color: var(--accent); color: var(--accent); }
+.range-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.range-select { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.range-select select { min-height: 32px; border: 1px solid var(--line); background: var(--paper); padding: 4px 22px 4px 7px; color: var(--ink); font-size: 12px; }
+.range-action { min-height: 32px; border: 1px solid var(--line); background: transparent; padding: 5px 7px; color: var(--muted); font-size: 11px; cursor: pointer; white-space: nowrap; }
+.range-action:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+
+.feedback { display: flex; align-items: center; gap: 10px; margin: 10px 0; padding: 9px 11px; border-left: 3px solid; font-size: 13px; }
+.feedback span { color: var(--muted); }
+.feedback button { margin-left: auto; border: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; }
+.feedback.success { border-color: var(--accent); background: var(--accent-soft); }
+.feedback.error { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+.updating-marker { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+
+.remaining-region { position: relative; padding: 16px 0 28px; }
+.empty-state { display: grid; place-items: center; gap: 5px; min-height: 220px; padding: 42px 16px; color: var(--muted); text-align: center; }
+.empty-state p { margin: 0; color: var(--ink); font-size: 16px; font-weight: 700; }
+.empty-state span { font-size: 13px; }
+.empty-symbol, .loader-mark { color: var(--accent); font-size: 36px; line-height: 1; }
+.error-state strong { color: var(--danger); }
+.error-state button { border: 1px solid var(--danger); background: var(--paper); padding: 7px 12px; color: var(--danger); cursor: pointer; }
+
+.tree-branch { position: relative; }
+.timeline-grid, .task-row { display: grid; grid-template-columns: minmax(0, 44%) minmax(0, 56%); }
+.task-row { align-items: stretch; min-height: 46px; border-bottom: 1px solid var(--line); background: var(--row-surface); transition: background-color var(--duration-standard) var(--ease-standard), opacity var(--duration-fast) var(--ease-exit); }
+.task-row:hover, .task-row:focus-within { background: var(--hover); }
+.task-row.is-dragging { opacity: .5; }
+.task-row.is-selected { background: var(--selected); }
+.task-identity { display: flex; align-items: center; min-width: 0; }
+.branch-rail { align-self: stretch; width: 2px; margin-left: calc(var(--depth, 0) * 22px + 10px); background: var(--soft); }
+.depth-1 .branch-rail { margin-left: 32px; }
+.depth-2 .branch-rail { margin-left: 54px; }
+.depth-3 .branch-rail { margin-left: 76px; }
+.depth-4 .branch-rail { margin-left: 98px; }
+.drag-handle { flex: 0 0 32px; min-height: 32px; border: 0; background: transparent; color: var(--drag-handle); font-size: 17px; letter-spacing: -4px; cursor: grab; touch-action: none; user-select: none; }
+.drag-handle:active { cursor: grabbing; }
+.disclosure, .disclosure-spacer { flex: 0 0 32px; width: 32px; min-height: 32px; border: 0; background: transparent; color: var(--accent); text-align: center; cursor: pointer; }
+.disclosure-spacer { display: inline-block; }
+.completion-box { flex: 0 0 32px; width: 32px; min-height: 32px; border: 1px solid var(--completion-border); background: var(--paper); color: var(--accent); font-size: 18px; line-height: 20px; cursor: pointer; }
+.task-copy { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; flex: 1; padding: 7px 8px 7px 4px; }
+.task-title { max-width: 100%; overflow: hidden; border: 0; background: transparent; padding: 0; color: var(--ink); font-size: 14px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
+.task-title:hover { color: var(--accent); text-decoration: underline; }
+.task-meta { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.state-dot { width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
+.state-active { background: var(--active); color: var(--active-ink); }
+.state-paused { background: var(--paused); color: var(--paused-ink); }
+.state-queued { color: var(--queued); }
+.child-count { margin-left: 5px; padding-left: 6px; border-left: 1px solid var(--line); }
+.row-actions { display: flex; gap: 2px; padding-right: 8px; }
+.quiet-action { min-height: 32px; border: 1px solid transparent; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.quiet-action:hover { border-color: var(--line); background: var(--soft); color: var(--ink); }
+.rename-form { display: flex; flex: 1; gap: 5px; }
+.rename-form input { min-width: 160px; flex: 1; border: 1px solid var(--accent); padding: 5px 7px; }
+.rename-form button, .inline-create button { border: 1px solid var(--line); background: var(--paper); padding: 4px 8px; color: var(--muted); cursor: pointer; }
+.rename-form button[type="submit"], .inline-create button[type="submit"] { border-color: var(--accent); color: var(--accent); }
+
+.drop-seam { height: 5px; margin-left: 72px; border-top: 1px solid transparent; color: var(--accent); font-size: 10px; pointer-events: auto; }
+.drop-seam span { display: none; }
+.drop-seam.is-current span { display: block; margin-top: -1px; padding-left: 6px; background: var(--accent-soft); }
+.drop-seam.is-invalid.is-current { border-top-color: var(--danger); color: var(--danger); }
+.drop-seam.is-invalid.is-current span { background: var(--danger-soft); }
+.root-append-basin { margin: 0 12px 4px 74px; border: 1px dashed var(--accent); background: var(--accent-surface); padding: 5px 9px; color: var(--accent); font-size: 11px; text-align: center; }
+.root-append-basin.is-invalid { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+.inline-create { display: flex; align-items: center; gap: 7px; margin: 6px 8px 9px 74px; padding: 5px 7px; border-left: 2px solid var(--accent); background: var(--accent-soft); }
+.inline-create input { min-width: 0; flex: 1; border: 1px solid var(--line); background: var(--paper); padding: 6px 8px; }
+.inline-create span { color: var(--accent); }
+
+.timeline-cell { position: relative; display: flex; align-items: center; min-width: 0; min-height: 46px; border-left: 1px solid var(--line); background: var(--timeline-surface); padding: 0 8px; cursor: pointer; }
+.timeline-cell:hover, .timeline-cell.is-selected { background: var(--accent-surface); }
+.timeline-rail { position: relative; width: 100%; height: 32px; }
+.lifetime-bar { position: absolute; top: 12px; min-width: 3px; height: 9px; border: 1px solid var(--accent); border-radius: 2px; background: var(--accent-soft); pointer-events: none; }
+.lifetime-bar.is-open { border-right-style: dashed; background: var(--open-surface); }
+.lifetime-bar.is-closed { border-color: var(--complete); background: var(--closed-surface); }
+.lifetime-bar.is-clipped-left { border-left-style: dashed; }
+.lifetime-bar.is-clipped-right { border-right-style: dashed; }
+.lifetime-start, .lifetime-end { position: absolute; top: -3px; width: 2px; height: 15px; background: currentColor; }
+.lifetime-start { left: -1px; }
+.lifetime-end { right: -1px; }
+.lifetime-bar.is-open .lifetime-end { border-right: 2px dashed var(--accent); background: transparent; }
+.lifetime-bar.is-closed .lifetime-end { background: var(--complete); }
+.clip-chevron { position: absolute; top: -7px; color: var(--accent); font-size: 20px; font-weight: 700; line-height: 20px; }
+.clip-left { left: -1px; }
+.clip-right { right: -1px; }
+.clip-label { position: absolute; top: 22px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.lifetime-point { position: absolute; top: 9px; width: 14px; height: 14px; transform: translateX(-50%); border: 2px solid var(--accent); border-radius: 50%; background: var(--paper); }
+.lifetime-point.is-warning { border-color: var(--danger); background: var(--danger-soft); }
+.missing-end-label { position: absolute; top: 22px; transform: translateX(-50%); color: var(--danger); font-size: 10px; white-space: nowrap; }
+.timeline-locator { width: 100%; min-height: 30px; border: 1px dashed var(--accent); background: var(--accent-soft); padding: 5px 8px; color: var(--accent); font-size: 11px; text-align: center; cursor: pointer; }
+.timeline-locator:hover { border-color: var(--ink); color: var(--ink); }
+
+.timeline-ruler { min-height: 48px; border-bottom: 1px solid var(--ink); }
+.ruler-identity { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: 5px 8px 5px 74px; color: var(--ink); font-size: 11px; }
+.ruler-identity small { color: var(--muted); font-size: 10px; }
+.ruler-cell { position: relative; min-width: 0; min-height: 48px; border-left: 1px solid var(--line); }
+.ruler-ticks { position: absolute; inset: 2px 0 auto; height: 18px; }
+.ruler-tick { position: absolute; transform: translateX(-50%); color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ruler-tick:first-child { transform: none; }
+.ruler-tick:last-child { transform: translateX(-100%); }
+.now-rule { position: absolute; z-index: 1; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--accent); pointer-events: none; }
+.now-rule::after { content: "NOW"; position: absolute; top: 18px; right: 4px; padding: 1px 3px; background: var(--accent); color: var(--on-accent); font-size: 9px; letter-spacing: .08em; }
+.range-bounds { position: absolute; right: 5px; bottom: 3px; left: 5px; display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.range-legend { margin: 5px 0 7px 74px; color: var(--muted); font-size: 11px; }
+.lifetime-readout { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 10px; margin: 0 0 8px 74px; border-left: 2px solid var(--accent); background: var(--soft); padding: 6px 8px; font-size: 11px; }
+.lifetime-readout strong { color: var(--ink); font-size: 12px; }
+.lifetime-readout span { color: var(--muted); }
+
+.limit-note { margin: -8px 0 16px 74px; color: var(--danger); font-size: 12px; }
+
+.keyboard-placement { position: fixed; z-index: 10; right: 20px; bottom: 20px; width: min(520px, calc(100% - 40px)); max-height: min(70vh, 480px); overflow: auto; border: 1px solid var(--ink); background: var(--paper); box-shadow: 0 10px 30px var(--surface-shadow); padding: 12px; }
+.placement-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.placement-heading strong { font-size: 13px; }
+.placement-heading span { color: var(--muted); font-size: 11px; }
+.placement-list { display: grid; gap: 2px; padding: 8px 0; }
+.placement-list button { width: 100%; border: 1px solid transparent; background: transparent; padding: 7px 8px; color: var(--ink); font-size: 12px; text-align: left; cursor: pointer; }
+.placement-list button.is-selected { border-color: var(--accent); background: var(--accent-soft); }
+.placement-list button.is-invalid { color: var(--danger); text-decoration: line-through; }
+.placement-list button span { color: var(--danger); }
+.placement-cancel { border: 1px solid var(--line); background: transparent; padding: 6px 9px; color: var(--muted); cursor: pointer; }
+
+.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; white-space: nowrap !important; clip-path: inset(50%) !important; }
+
+@media (max-width: 760px) {
+  .work-surface { width: min(100% - 20px, 1120px); padding-top: 10px; }
+  .compact-topline { flex-wrap: wrap; }
+  .now-label { min-width: 150px; }
+  .top-create { order: 3; flex-basis: 100%; max-width: none; }
+  .timeline-grid, .task-row { grid-template-columns: minmax(0, 46%) minmax(0, 54%); }
+  .range-controls { flex-basis: 100%; margin-left: 0; }
+  .ruler-identity { padding-left: 50px; }
+  .range-legend, .lifetime-readout { margin-left: 50px; }
+  .row-actions { flex-direction: column; }
+  .root-append-basin, .inline-create { margin-left: 50px; }
+  .drop-seam { margin-left: 50px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
+
+/* History-left / NOW-right surface */
+.history-surface { position: relative; padding: 12px 0 28px; }
+.history-composite { --history-left: calc(46% - 18px); --history-right: calc(54% - 18px); position: relative; outline: none; }
+.history-composite:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
+.history-ruler-grid, .history-row, .history-detail-row, .history-empty-row { display: grid; grid-template-columns: var(--history-left) 36px var(--history-right); }
+.history-ruler-grid { min-height: 48px; border-bottom: 1px solid var(--ink); }
+.history-ruler-cell { position: relative; min-width: 0; min-height: 48px; border-right: 1px solid var(--line); }
+.history-ruler-cell .ruler-ticks { right: 0; }
+.now-hinge-header { position: relative; min-height: 48px; border-left: 1px solid var(--ink); border-right: 1px solid var(--ink); background: var(--soft); }
+.now-hinge-header::before { content: "NOW"; position: absolute; top: 17px; left: 50%; transform: translateX(-50%); padding: 2px 3px; background: var(--accent); color: var(--on-accent); font-size: 9px; font-weight: 800; letter-spacing: .08em; writing-mode: vertical-rl; }
+.now-hinge-header.is-discontinuous::after { content: "…"; position: absolute; right: 3px; bottom: 2px; color: var(--muted); font-size: 13px; }
+.identity-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding: 6px 8px; color: var(--ink); font-size: 12px; font-weight: 700; }
+.identity-heading small { color: var(--muted); font-size: 10px; font-weight: 400; }
+.history-row { align-items: stretch; min-height: 46px; border-bottom: 1px solid var(--line); background: var(--row-surface); }
+.history-row:hover, .history-row:focus-within { background: var(--hover); }
+.history-row.is-selected { background: var(--selected); }
+.history-mark-cell { position: relative; display: flex; align-items: center; min-width: 0; min-height: 46px; border-right: 1px solid var(--line); background: var(--timeline-surface); padding: 0 8px; cursor: pointer; }
+.history-mark-cell:hover, .history-mark-cell.is-selected { background: var(--accent-surface); }
+.history-rail { position: relative; width: 100%; height: 32px; }
+.history-rail .timeline-locator { width: 100%; }
+.history-continuation { position: absolute; top: 22px; right: 0; color: var(--accent); font-size: 10px; white-space: nowrap; }
+.now-hinge-cell { position: relative; min-height: 46px; border-left: 1px solid var(--ink); border-right: 1px solid var(--ink); background: var(--hinge-surface); }
+.now-hinge-cell.is-discontinuous { background: var(--hinge-surface); }
+.now-hinge-cell.is-discontinuous::after { content: "… NOW"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-90deg); color: var(--muted); font-size: 9px; white-space: nowrap; }
+.now-hinge-cell > span { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--accent); font-size: 14px; }
+.current-identity { display: flex; align-items: center; min-width: 0; }
+.current-identity .branch-rail { flex: 0 0 auto; }
+.pocket-right-spacer, .detail-right-spacer { min-width: 0; border-left: 1px solid var(--line); }
+.history-detail-row { min-height: 44px; margin: 6px 0; border-left: 2px solid var(--accent); background: var(--soft); }
+.history-detail { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 9px; min-width: 0; padding: 6px 8px; font-size: 11px; }
+.history-detail strong { color: var(--ink); font-size: 12px; }
+.history-detail span { color: var(--muted); }
+.history-detail .history-detail-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-detail-summary { display: grid; flex: 1 1 220px; gap: 1px; min-width: 0; }
+.history-detail-summary strong, .history-detail-summary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-detail-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; margin-left: auto; }
+.history-help { margin: 4px 0 7px; color: var(--muted); font-size: 11px; }
+.history-empty-row { min-height: 72px; border-bottom: 1px solid var(--line); }
+.history-empty-history { display: flex; align-items: center; padding: 12px 8px; color: var(--muted); font-size: 11px; }
+.current-empty { display: grid; align-content: center; gap: 2px; min-width: 0; padding: 10px 8px; color: var(--muted); font-size: 11px; }
+.current-empty strong { color: var(--ink); font-size: 12px; }
+.history-pocket { display: grid; align-content: center; min-width: 0; min-height: 30px; padding: 3px 8px; }
+.pocket-row { min-height: 34px; }
+.pocket-lanes { position: relative; min-height: 18px; border-bottom: 1px solid var(--line); }
+.pocket-mark { position: absolute; top: 6px; min-width: 4px; height: 8px; transform: translateX(-1px); overflow: visible; border: 0; border-left: 2px solid var(--complete); background: var(--closed-surface); padding: 0; color: var(--complete); font-size: 9px; line-height: 8px; text-align: left; cursor: pointer; }
+.pocket-mark.is-before, .pocket-mark.is-after { width: 10px !important; border: 0; background: transparent; color: var(--muted); font-size: 12px; }
+.pocket-mark.is-after { transform: translateX(-100%); text-align: right; }
+.pocket-mark.is-warning { border-left-style: dashed; background: var(--danger-soft); color: var(--danger); }
+.pocket-mark.is-selected { outline: 2px solid var(--focus); outline-offset: 2px; z-index: 2; }
+.pocket-more { position: absolute; top: 1px; right: 0; min-height: 20px; border: 1px dashed var(--accent); background: var(--accent-soft); padding: 1px 5px; color: var(--accent); font-size: 10px; cursor: pointer; }
+.pocket-caption { max-width: 100%; overflow: hidden; border: 0; background: transparent; padding: 2px 0 0; color: var(--muted); font-size: 10px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.history-pocket.is-selected .pocket-caption { color: var(--ink); font-weight: 700; }
+.history-pocket.is-expanded { min-height: 46px; }
+.history-pocket.is-expanded .pocket-lanes { min-height: 30px; }
+.history-pocket.is-expanded .pocket-mark { top: 14px; }
+.pocket-branch { min-height: 34px; }
+
+/* The current hierarchy actions stay on the identity side of the hinge. */
+.history-row .task-identity { display: none; }
+.history-row .current-identity .task-copy { display: flex; }
+.history-row .drag-handle, .history-row .disclosure, .history-row .completion-box { flex: 0 0 32px; }
+
+@media (max-width: 760px) {
+  .history-composite { --history-left: calc(44% - 14px); --history-right: calc(56% - 14px); }
+  .history-ruler-grid, .history-row, .history-detail-row, .history-empty-row { grid-template-columns: var(--history-left) 28px var(--history-right); }
+  .identity-heading small { display: none; }
+  .history-detail .history-detail-path { flex-basis: 100%; }
+  .history-help { margin-left: 0; }
+}
+
+/* Compact completed members keep their own lane and still share the ruler geometry. */
+.history-pocket { align-content: stretch; min-height: 0; padding: 3px 8px 4px; }
+.pocket-row { min-height: 0; }
+.pocket-lanes { display: grid; min-height: 0; border-bottom: 1px solid var(--line); }
+.pocket-member-row { position: relative; min-height: 20px; border-bottom: 1px solid var(--pocket-line); }
+.pocket-member-row:last-of-type { border-bottom: 0; }
+.pocket-member-track { position: relative; min-height: 20px; overflow: visible; }
+.pocket-mark { top: 5px; height: 10px; z-index: 2; }
+.pocket-member-title { position: absolute; top: 1px; z-index: 3; display: block; max-width: 34%; overflow: hidden; min-height: 18px; border: 0; background: var(--surface); padding-top: 0; padding-right: 3px; padding-bottom: 0; color: var(--muted); font-size: 10px; line-height: 18px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.pocket-member-title:hover, .pocket-member-row.is-selected .pocket-member-title { color: var(--ink); text-decoration: underline; }
+.pocket-member-branch { display: inline-block; width: 12px; color: var(--accent); font-size: 11px; }
+.pocket-more { top: auto; right: 4px; bottom: 2px; z-index: 4; }
+.history-pocket.is-expanded { min-height: 0; }
+.history-pocket.is-expanded .pocket-lanes { min-height: 0; }
+.history-pocket.is-expanded .pocket-mark { top: 5px; }
+
+/* A row's identity is the parent-append basin while a pointer drag is active. */
+.drop-seam { position: relative; z-index: 8; height: 0; margin: 0; border-top: 0; pointer-events: auto; }
+.drop-seam span { position: absolute; top: -10px; right: 8px; left: 72px; display: block; height: 20px; overflow: hidden; margin: 0; border-top: 1px solid transparent; background: transparent; padding: 1px 6px; opacity: 0; pointer-events: auto; text-overflow: ellipsis; white-space: nowrap; }
+.drop-seam.is-current span { border-top-color: var(--accent); background: var(--accent-soft); opacity: 1; }
+.drop-seam.is-invalid.is-current span { border-top-color: var(--danger); background: var(--danger-soft); }
+.current-identity { position: relative; }
+.current-identity.is-drop-target { outline: 1px dashed var(--drop-target); outline-offset: -1px; box-shadow: inset 0 0 0 1px var(--drop-target-shadow); background: var(--accent-surface); }
+.current-identity.is-drop-target.is-invalid { outline-color: var(--danger); box-shadow: inset 0 0 0 1px var(--danger-shadow); background: var(--danger-soft); }
+.current-identity.is-drop-target:not(.is-current) { outline-style: dotted; box-shadow: none; }
+.current-identity.is-drop-target.is-current { outline-width: 2px; }
+.identity-drop-cue { position: absolute; z-index: 5; top: -18px; right: 4px; left: 4px; overflow: hidden; border-bottom: 1px solid currentColor; padding: 1px 5px; color: var(--accent); font-size: 10px; line-height: 15px; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; }
+.current-identity.is-drop-target.is-invalid .identity-drop-cue { color: var(--danger); }
+
+@media (max-width: 760px) {
+  .drop-seam span { right: 8px; left: 50px; }
+}
+
+/* Reversible operations: one durable latest-operation receipt aligned with
+   the same history / NOW / identity columns as the task surface. */
+.undo-receipt { --history-left: calc(46% - 18px); --history-right: calc(54% - 18px); display: grid; grid-template-columns: var(--history-left) 36px var(--history-right); height: 40px; margin: 6px 0 8px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--soft); font-size: 11px; }
+.undo-receipt:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.undo-receipt-left { display: flex; align-items: center; min-width: 0; padding: 5px 8px; color: var(--muted); }
+.undo-receipt-kicker { letter-spacing: .06em; }
+.undo-receipt-hinge { border-left: 1px solid var(--ink); border-right: 1px solid var(--ink); background: var(--hinge-surface); }
+.undo-receipt-right { display: flex; align-items: center; flex-wrap: nowrap; gap: 4px 9px; min-width: 0; overflow: hidden; padding: 4px 8px; }
+.undo-receipt-label { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--ink); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.undo-receipt-error { max-width: 42%; overflow: hidden; color: var(--danger); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.undo-action { min-height: 30px; margin-left: auto; border: 1px solid var(--accent); background: var(--paper); padding: 4px 9px; color: var(--accent); font-size: 11px; cursor: pointer; white-space: nowrap; }
+.undo-action:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
+
+/* Delete scope stays in-flow so pending rows keep their committed geometry. */
+.delete-confirm { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 9px; margin: 5px 8px 7px 74px; border-left: 2px solid var(--danger); background: var(--danger-soft); padding: 7px 9px; color: var(--muted); font-size: 11px; }
+.delete-confirm strong { color: var(--danger); font-size: 12px; }
+.delete-confirm span { flex-basis: 100%; }
+.delete-confirm ul { flex-basis: 100%; margin: 2px 0 0; padding-left: 18px; color: var(--muted); }
+.delete-confirm li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.delete-confirm-actions { display: flex; gap: 5px; margin-left: auto; }
+.danger-action { min-height: 32px; border: 1px solid var(--danger); background: var(--paper); padding: 5px 8px; color: var(--danger); font-size: 12px; cursor: pointer; }
+.danger-action:hover:not(:disabled) { background: var(--danger); color: var(--on-accent); }
+.delete-action:hover:not(:disabled), .delete-action:focus-visible { border-color: var(--danger); color: var(--danger); }
+
+/* Completion is understandable without hover, while keeping the row quiet at rest. */
+.completion-box { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 34px; min-height: 34px; border: 1px solid var(--completion-border); border-radius: 50%; background: var(--paper); color: var(--accent); font-size: 17px; cursor: pointer; }
+.completion-glyph { line-height: 1; }
+.completion-intent { max-width: 0; overflow: hidden; color: var(--ink); font-size: 11px; font-weight: 700; opacity: 0; white-space: nowrap; transition: opacity var(--duration-fast) var(--ease-standard); }
+.completion-box:hover, .completion-box:focus-visible { border-color: var(--accent); border-radius: 4px; }
+.completion-box:hover .completion-intent, .completion-box:focus-visible .completion-intent { max-width: 4em; opacity: 1; }
+.completion-box.is-pending { border-style: dashed; border-radius: 4px; }
+.completion-box.is-pending .completion-intent { max-width: 7em; opacity: 1; }
+
+/* Root append is a fixed, reachable destination while pointer placement is active. */
+.root-landing-sill { position: fixed; z-index: 20; right: 12px; bottom: 8px; left: 12px; display: flex; align-items: center; justify-content: center; min-height: 40px; border: 1px dashed var(--accent); background: var(--accent-surface); padding: 7px 12px; color: var(--accent); font-size: 12px; font-weight: 700; text-align: center; box-shadow: 0 -3px 12px var(--landing-shadow); pointer-events: auto; }
+.root-landing-sill.is-current { border-width: 2px; background: var(--accent-soft); }
+.root-landing-sill.is-invalid { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+
+@media (max-width: 760px) {
+  .undo-receipt { --history-left: calc(44% - 14px); --history-right: calc(56% - 14px); grid-template-columns: var(--history-left) 28px var(--history-right); }
+  .delete-confirm { margin-left: 50px; }
+  .root-landing-sill { right: 8px; bottom: 6px; left: 8px; }
+}
+
+@media (min-resolution: 1.5dppx) {
+  .root-landing-sill { min-height: 48px; }
+}
+
+/* Override the compact row basis structurally so the intent label can open
+   beside the ring without being clipped by the legacy 32px flex slot. */
+.history-row .completion-box { flex: 0 0 34px; width: 34px; min-width: 34px; max-width: none; overflow: visible; padding: 0; }
+.history-row .completion-box:hover, .history-row .completion-box:focus-visible, .history-row .completion-box.is-pending { flex: 0 0 auto; width: auto; min-width: 34px; padding-right: 8px; padding-left: 8px; }
+
+@media (forced-colors: active) {
+  .completion-box, .danger-action, .delete-action, .undo-action, .root-landing-sill { border-color: ButtonText; background: ButtonFace; color: ButtonText; forced-color-adjust: auto; }
+  .completion-box:hover, .completion-box:focus-visible, .undo-action:hover:not(:disabled), .danger-action:hover:not(:disabled), .root-landing-sill.is-current { border-color: Highlight; background: Highlight; color: HighlightText; }
+  .delete-confirm { border-left-color: ButtonText; background: Canvas; color: CanvasText; }
+  .root-landing-sill.is-invalid { border-color: ButtonText; background: Canvas; color: ButtonText; }
+  .undo-receipt:focus-visible, .completion-box:focus-visible, .danger-action:focus-visible, .undo-action:focus-visible, .root-landing-sill:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+}
+
+/* Density / navigation pass: keep the time plane available while the rows
+   scroll, and make the two high-value jumps compact but fully named. */
+.timeline-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  background: var(--paper);
+  box-shadow: 0 1px 0 var(--ink);
+  scroll-margin-top: 56px;
+}
+.ruler-jumps { display: flex; align-items: center; gap: 3px; margin-left: auto; }
+.ruler-jump { min-height: 24px; border: 1px solid var(--line); background: transparent; padding: 2px 5px; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 1.1; cursor: pointer; white-space: nowrap; }
+.ruler-jump:hover:not(:disabled), .ruler-jump:focus-visible { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+.ruler-jump:disabled { cursor: not-allowed; }
+.history-surface, .history-row, .history-pocket, .pocket-mark, [data-history-mark], [id^="history-task-"] { scroll-margin-top: 56px; }
+
+/* The auxiliary labels remain in the accessibility tree but do not compete
+   with the ruler, NOW identity, or primary task title at normal density. */
+.now-caption.sr-only, .range-legend.sr-only, .history-help.sr-only { position: absolute !important; }
+
+/* Secondary row actions occupy one stable end region.  Opacity leaves them
+   keyboard-reachable; pointer input is enabled only after the row is exposed. */
+.current-identity { position: relative; }
+.row-actions { position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: flex-end; width: 148px; padding-right: 8px; padding-left: 16px; background: linear-gradient(to right, transparent, var(--paper) 16px); opacity: 0; pointer-events: none; transform: translateX(4px); transition: opacity var(--duration-fast) var(--ease-exit), transform var(--duration-fast) var(--ease-exit); }
+.history-row:hover .row-actions, .history-row:focus-within .row-actions, .history-row.is-selected .row-actions { opacity: 1; pointer-events: auto; }
+.row-actions .quiet-action { flex: 0 0 auto; pointer-events: auto; }
+.range-current::before { content: "NOW"; }
+
+/* Completion is a fixed primary cell.  Hover/focus changes only its
+   semantic color/outline; the intent string is assistive-only. */
+.history-row .completion-box, .completion-box { flex: 0 0 34px; width: 34px; min-width: 34px; max-width: 34px; height: 34px; min-height: 34px; max-height: 34px; padding: 0; overflow: hidden; }
+.completion-intent { display: none; }
+.completion-box:hover, .completion-box:focus-visible { width: 34px; min-width: 34px; max-width: 34px; height: 34px; min-height: 34px; max-height: 34px; border-radius: 50%; border-color: var(--accent); background: var(--accent-soft); color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px; }
+.history-row .completion-box:hover, .history-row .completion-box:focus-visible, .history-row .completion-box.is-pending, .history-row .completion-box.is-pending:hover, .history-row .completion-box.is-pending:focus-visible { flex: 0 0 34px; width: 34px; min-width: 34px; max-width: 34px; height: 34px; min-height: 34px; max-height: 34px; padding: 0; }
+
+/* Completed pockets remain compact, but their mark/title relationship is
+   readable at a glance without widening the timeline plane. */
+.pocket-member-row { min-height: 21px; border-bottom-color: var(--pocket-line); }
+.pocket-member-track { min-height: 21px; }
+.pocket-member-title { max-width: 38%; min-height: 19px; color: var(--pocket-member-text); font-size: 11px; line-height: 19px; }
+.pocket-caption { padding-top: 3px; color: var(--pocket-member-text); font-size: 11px; }
+.pocket-mark { min-width: 0; height: 10px; }
+
+/* Shape carries lifecycle meaning even without color. */
+.lifetime-point { width: 12px; height: 12px; border-radius: 50%; }
+.lifetime-point.is-open { border-style: dashed; background: var(--paper); }
+.lifetime-point.is-closed { border-radius: 1px; background: var(--complete); }
+.lifetime-point.is-warning { border-style: dashed; border-radius: 2px; background: repeating-linear-gradient(135deg, var(--danger-soft) 0 2px, var(--paper) 2px 4px); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.pocket-mark.is-point { min-width: 0; width: 10px !important; height: 10px; transform: translateX(-50%); border: 1px solid var(--complete); border-radius: 1px; background: var(--complete); color: var(--complete); line-height: 8px; }
+.pocket-mark.is-point.is-warning { border: 1px dashed var(--danger); border-radius: 2px; background: repeating-linear-gradient(135deg, var(--danger-soft) 0 2px, var(--paper) 2px 4px); color: var(--danger); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+
+/* Completed selection details stay beside the selected pocket.  The local
+   row ends at the NOW hinge so it never creates an empty right-side panel. */
+.history-detail-row-local { grid-template-columns: minmax(0, 1fr) 36px; width: calc(var(--history-left) + 36px); max-width: 100%; margin: 4px 0 5px; }
+.history-detail-row-local .history-detail { min-width: 0; }
+
+@media (max-width: 760px) {
+  .history-detail-row-local { grid-template-columns: minmax(0, 1fr) 28px; width: calc(var(--history-left) + 28px); }
+}
+
+/* Rename occupies the identity plane by itself.  The secondary action region
+   stays reserved at rest, but is suppressed while the form is active so the
+   input and its controls cannot overlap. */
+.current-identity { padding-right: 124px; }
+.row-actions { width: 124px; }
+.history-row.is-editing .current-identity { padding-right: 8px; }
+.history-row.is-editing .row-actions,
+.history-row.is-editing .row-actions.is-suppressed { visibility: hidden; opacity: 0; pointer-events: none; }
+.history-row.is-editing .row-actions .quiet-action { pointer-events: none; }
+.history-row.is-editing .task-meta { display: none; }
+.history-row.is-editing .rename-form { width: 100%; min-width: 0; }
+.history-row.is-editing .rename-form input { min-width: 0; }
+
+/* Motion system: only state acknowledgement and panel entry move.  Timeline
+   geometry remains immediate so range changes and row density never drift. */
+@keyframes motion-panel-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.task-row:hover,
+.task-row:focus-within,
+.task-row.is-selected { transition: background-color var(--duration-standard) var(--ease-standard); }
+
+.history-mark-cell,
+.task-title,
+.pocket-member-title,
+.pocket-caption {
+  transition: background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard);
+}
+
+.top-create button,
+.top-action,
+.range-action,
+.ruler-jump,
+.quiet-action,
+.rename-form button,
+.inline-create button,
+.undo-action,
+.danger-action {
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.top-create button:active:not(:disabled),
+.top-action:active:not(:disabled),
+.range-action:active:not(:disabled),
+.ruler-jump:active:not(:disabled),
+.quiet-action:active:not(:disabled),
+.rename-form button:active:not(:disabled),
+.inline-create button:active:not(:disabled),
+.undo-action:active:not(:disabled),
+.danger-action:active:not(:disabled) { transform: translateY(1px); }
+
+.history-row:hover .row-actions,
+.history-row:focus-within .row-actions,
+.history-row.is-selected .row-actions {
+  transform: translateX(0);
+  transition-timing-function: var(--ease-enter);
+}
+
+.completion-box {
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    outline-color var(--duration-fast) var(--ease-standard);
+}
+.completion-box:hover,
+.completion-box:focus-visible { background-color: var(--accent-soft); }
+
+.rename-form,
+.inline-create {
+  animation: motion-panel-enter var(--duration-standard) var(--ease-enter) both;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+.history-detail-row-local,
+.delete-confirm,
+.feedback,
+.root-landing-sill {
+  animation: motion-panel-enter var(--duration-standard) var(--ease-enter) both;
+}
+.history-detail-row-local,
+.delete-confirm,
+.feedback,
+.root-landing-sill {
+  transition: border-color var(--duration-standard) var(--ease-standard),
+    background-color var(--duration-standard) var(--ease-standard),
+    color var(--duration-standard) var(--ease-standard),
+    opacity var(--duration-standard) var(--ease-standard),
+    transform var(--duration-standard) var(--ease-standard);
+}
+.root-landing-sill { transition-timing-function: var(--ease-enter); }
+
+/* Completed pockets read as small grouped clusters: the toggle is the
+   heading, while each member lane sits inside its inset guide. */
+.history-pocket { gap: 1px; }
+.history-pocket .pocket-caption {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 20px;
+  border: 1px solid var(--line);
+  background: var(--pocket-caption-surface);
+  padding: 2px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: initial;
+  text-overflow: clip;
+}
+.pocket-caption-chevron { color: var(--ink); font-size: 17px; font-weight: 800; line-height: 1; }
+.pocket-caption-title { min-width: 0; overflow: hidden; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.pocket-caption-count { border: 1px solid var(--line); background: var(--paper); padding: 1px 5px; color: var(--ink); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; }
+.history-pocket .pocket-lanes { margin-left: 8px; border-left-width: 2px; border-left-style: solid; border-left-color: var(--line); background: var(--pocket-lane-surface); padding: 1px 5px 1px 7px; }
+.history-pocket.is-selected .pocket-caption { outline: 2px double var(--ink); outline-offset: -2px; font-weight: 800; }
+.history-pocket.is-selected .pocket-caption-count { border-style: double; border-color: var(--ink); font-weight: 800; }
+.history-pocket.is-selected .pocket-lanes { border-left-width: 3px; border-left-style: double; border-left-color: var(--ink); }
+.history-pocket .pocket-caption:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.history-pocket .pocket-caption:hover { background-color: var(--accent-soft); }
+
+/* At narrow widths keep the primary add action first and keep the complete
+   range/reload cluster together on one secondary row. */
+@media (max-width: 760px) {
+  .compact-topline {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "primary primary" "secondary reload";
+    align-items: center;
+    gap: 6px 8px;
+  }
+  .top-create { grid-area: primary; order: initial; flex: none; width: 100%; min-width: 0; max-width: none; }
+  .range-controls { grid-area: secondary; flex-basis: auto; flex-wrap: nowrap; min-width: 0; margin-left: 0; }
+  .top-action { grid-area: reload; width: 34px; min-width: 34px; padding: 0; }
+}
+
+/* State cues stay inline and do not reserve another card or row. */
+.history-row.is-active .state-dot { outline: 1px solid var(--active-ink); outline-offset: 1px; box-shadow: 0 0 0 1px var(--active-shadow); }
+.history-row.is-paused .state-dot { border-radius: 2px; transform: rotate(45deg); }
+
+/* One remaining task paints as one continuous readout across time, NOW, and
+   identity.  These are paint-only changes: no padding, size, or position. */
+.history-row .history-mark-cell,
+.history-row .now-hinge-cell,
+.history-row .current-identity { transition: background-color var(--duration-standard) var(--ease-standard); }
+.history-row:hover .history-mark-cell,
+.history-row:focus-within .history-mark-cell { background-color: var(--selected-mark); }
+.history-row.is-selected .history-mark-cell { background-color: #edf7f2; }
+.history-row:hover .now-hinge-cell,
+.history-row:focus-within .now-hinge-cell { background-color: var(--selected-hinge); }
+.history-row.is-selected .now-hinge-cell { background-color: #e6f1ed; }
+.history-row:hover .current-identity:not(.is-drop-target),
+.history-row:focus-within .current-identity:not(.is-drop-target),
+.history-row.is-selected .current-identity:not(.is-drop-target) { background-color: var(--selected-identity); box-shadow: inset 0 1px 0 var(--line), inset 0 -1px 0 var(--line); }
+.history-row:hover .lifetime-bar,
+.history-row:focus-within .lifetime-bar,
+.history-row.is-selected .lifetime-bar { box-shadow: 0 0 0 1px var(--accent); }
+.history-row:hover .lifetime-point,
+.history-row:focus-within .lifetime-point,
+.history-row.is-selected .lifetime-point { outline: 1px solid var(--accent); outline-offset: 1px; }
+.history-row.is-selected { box-shadow: inset 0 1px 0 var(--selected-border), inset 0 -1px 0 var(--selected-border); }
+
+/* Current-row confirmation stays attached to its right identity plane and
+   does not insert a new flow row.  Completed detail keeps its prior flow. */
+.delete-confirm-current { position: absolute; z-index: 14; top: 46px; right: 0; left: calc(var(--history-left) + 36px); max-width: calc(var(--history-right)); margin: 4px 0 0; }
+.delete-confirm-current ul { max-height: min(35vh, 240px); overflow-y: auto; overscroll-behavior: contain; }
+.delete-confirm-current li { overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; }
+.delete-confirm-completed { position: relative; }
+
+@media (max-width: 760px) {
+  .delete-confirm-current { left: calc(var(--history-left) + 28px); max-width: calc(var(--history-right)); }
+}
+
+/* OS-selected dark mode is a token remap only.  The DOM, geometry, and
+   interaction surfaces stay identical to the light theme. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: #0e1214;
+    --surface: #151b1e;
+    --soft-surface: #1e282b;
+    --text: #f1f6f3;
+    --muted-text: #b7c3c0;
+    --lines: #5a6b70;
+    --accent: #62d3c5;
+    --accent-soft: #1a4744;
+    --completion: #8bcdb7;
+    --danger: #ff9b92;
+    --danger-soft: #3b2527;
+    --focus: #8ddcff;
+    --hover: #202d30;
+    --selected: #224a4b;
+    --row-surface: #151b1e;
+    --timeline-surface: #151b1e;
+    --accent-surface: #1a4744;
+    --open-surface: #1a4744;
+    --closed-surface: #1e282b;
+    --hinge-surface: #151b1e;
+    --placeholder: #b7c3c0;
+    --drag-handle: #b7c3c0;
+    --completion-border: #8bcdb7;
+    --active: #f2b765;
+    --active-ink: #f2b765;
+    --paused: #b7c3c0;
+    --paused-ink: #b7c3c0;
+    --queued: #9fbac1;
+    --warning: #f2c86f;
+    --warning-border: #f2c86f;
+    --warning-surface: #2a251c;
+    --pocket-line: #5a6b70;
+    --pocket-member-text: #b7c3c0;
+    --pocket-caption-surface: #1e282b;
+    --pocket-lane-surface: #1a2326;
+    --drop-target: #5ccec1;
+    --drop-target-shadow: rgba(92, 206, 193, .35);
+    --danger-shadow: rgba(255, 155, 146, .32);
+    --active-shadow: rgba(242, 183, 101, .35);
+    --selected-mark: #224a4b;
+    --selected-hinge: #224a4b;
+    --selected-identity: #224a4b;
+    --selected-border: var(--accent);
+    --surface-shadow: rgba(0, 0, 0, .45);
+    --landing-shadow: rgba(0, 0, 0, .35);
+    --on-accent: #0e1214;
+  }
+
+  .history-row.is-selected .history-mark-cell { background-color: var(--selected-mark); }
+  .history-row.is-selected .now-hinge-cell { background-color: var(--selected-hinge); }
+}
+
+@media (forced-colors: active) {
+  .history-row:hover .current-identity:not(.is-drop-target),
+  .history-row:focus-within .current-identity:not(.is-drop-target),
+  .history-row.is-selected .current-identity:not(.is-drop-target) { background: Canvas; box-shadow: inset 0 1px 0 ButtonText, inset 0 -1px 0 ButtonText; }
+  .history-row.is-selected { box-shadow: inset 0 1px 0 Highlight, inset 0 -1px 0 Highlight; }
+  .history-row.is-active .state-dot,
+  .history-row.is-paused .state-dot { border-color: ButtonText; outline-color: ButtonText; box-shadow: none; }
+  .delete-confirm-current { border-color: ButtonText; background: Canvas; color: CanvasText; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto !important; }
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
