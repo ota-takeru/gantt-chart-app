@@ -17,6 +17,7 @@ use std::time::Instant;
 const MAX_PAGE_SIZE: u32 = 200;
 const MAX_ARCHIVE_DAYS: i64 = 366;
 const MAX_UNDO_ENTRIES: i64 = 50;
+const MAX_MEMO_SCALARS: usize = 4_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SnapshotTask {
@@ -24,6 +25,8 @@ struct SnapshotTask {
     title: String,
     state: String,
     created_at: String,
+    #[serde(default)]
+    memo: String,
     completed_at: Option<String>,
     version: i64,
 }
@@ -89,7 +92,7 @@ fn capture_observable_snapshot(connection: &Connection) -> Result<ObservableSnap
     let tasks = {
         let mut statement = connection
             .prepare(
-                "SELECT id, title, state, created_at, completed_at, version FROM tasks ORDER BY id",
+                "SELECT id, title, state, created_at, memo, completed_at, version FROM tasks ORDER BY id",
             )
             .map_err(db::storage_error)?;
         let rows = statement
@@ -99,8 +102,9 @@ fn capture_observable_snapshot(connection: &Connection) -> Result<ObservableSnap
                     title: row.get(1)?,
                     state: row.get(2)?,
                     created_at: row.get(3)?,
-                    completed_at: row.get(4)?,
-                    version: row.get(5)?,
+                    memo: row.get(4)?,
+                    completed_at: row.get(5)?,
+                    version: row.get(6)?,
                 })
             })
             .map_err(db::storage_error)?;
@@ -370,13 +374,14 @@ fn restore_observable_snapshot(
         };
         transaction
             .execute(
-                "INSERT INTO tasks (id, title, state, created_at, completed_at, version)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO tasks (id, title, state, created_at, memo, completed_at, version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     task.id,
                     task.title,
                     task.state,
                     task.created_at,
+                    task.memo,
                     task.completed_at,
                     version
                 ],
@@ -424,6 +429,16 @@ fn validate_title(title: &str) -> Result<String, DomainError> {
         ));
     }
     Ok(trimmed.to_owned())
+}
+
+fn validate_memo(memo: &str) -> Result<(), DomainError> {
+    if memo.chars().count() > MAX_MEMO_SCALARS {
+        return Err(DomainError::new(
+            "invalid-memo",
+            "Memo must contain at most 4000 Unicode scalar values",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_version(version: i64) -> Result<(), DomainError> {
@@ -612,6 +627,77 @@ pub fn rename_task(
     transaction.commit().map_err(db::storage_error)?;
     let _ = source_revision;
     db::task_snapshot(connection, task_id)
+}
+
+pub fn update_task_memo(
+    connection: &mut Connection,
+    task_id: &str,
+    memo: &str,
+    expected_task_version: i64,
+    effective_instant: &str,
+) -> Result<ReversibleChangeResult, DomainError> {
+    validate_memo(memo)?;
+    validate_version(expected_task_version)?;
+    let effective_dt = instant(effective_instant)?;
+    let effective = canonical(effective_dt);
+    let operation_id = db::new_id();
+    let transaction = transaction(connection)?;
+    let task = task_in_transaction(&transaction, task_id)?;
+    if task.version != expected_task_version {
+        return Err(DomainError::new("stale-version", "Task version is stale"));
+    }
+    validate_task_effective_instant(&transaction, task_id, effective_dt)?;
+
+    let source_revision = db::source_revision(&transaction)?;
+    let hierarchy_revision = db::hierarchy_revision(&transaction)?;
+    let queue_revision = db::queue_revision(&transaction)?;
+    let undo_revision = db::undo_revision(&transaction)?;
+    if task.memo == memo {
+        transaction.commit().map_err(db::storage_error)?;
+        return Ok(ReversibleChangeResult {
+            operation_id,
+            source_revision,
+            hierarchy_revision,
+            queue_revision,
+            undo_revision,
+            affected_task_ids: vec![task_id.to_owned()],
+            undo_status: undo_status_in(connection)?,
+        });
+    }
+
+    let undo_snapshot = capture_observable_snapshot(&transaction)?;
+    db::update_task_memo(&transaction, task_id, expected_task_version, memo)?;
+    db::insert_event(
+        &transaction,
+        Some(task_id),
+        &operation_id,
+        "task-memo-updated",
+        &effective,
+        &json!({
+            "hasMemo": !memo.is_empty(),
+            "scalarLength": memo.chars().count(),
+        }),
+    )?;
+    let source_revision = db::bump_source_revision(&transaction)?;
+    let undo_revision = record_undo_entry(
+        &transaction,
+        &operation_id,
+        "memo-update",
+        &format!("「{}」のメモを更新", task.title),
+        &effective,
+        &[task_id.to_owned()],
+        &undo_snapshot,
+    )?;
+    transaction.commit().map_err(db::storage_error)?;
+    Ok(ReversibleChangeResult {
+        operation_id,
+        source_revision,
+        hierarchy_revision,
+        queue_revision,
+        undo_revision,
+        affected_task_ids: vec![task_id.to_owned()],
+        undo_status: undo_status_in(connection)?,
+    })
 }
 
 pub fn start_task(
@@ -5196,5 +5282,284 @@ mod tests {
             .unwrap();
         undo_last_task_operation(&mut connection, &token, &at(4)).unwrap();
         assert!(get_task(&connection, &first_id).unwrap().version > before_rename_undo);
+    }
+
+    #[test]
+    fn memo_update_preserves_exact_text_and_only_advances_source_and_undo_revisions() {
+        let mut connection = connection();
+        let created =
+            create_task_in_hierarchy(&mut connection, "memo task", None, None, 0, &at(0)).unwrap();
+        let task_id = created.changed_tasks[0].id.clone();
+        let before = get_task(&connection, &task_id).unwrap();
+        let forest_before = get_task_forest(&connection, 20).unwrap();
+        let queue_before = get_next_queue(&connection, None, 20).unwrap();
+        let memo = "  日本語🙂\n二行目\t ";
+
+        let changed = update_task_memo(&mut connection, &task_id, memo, before.version, &at(1))
+            .expect("memo update");
+        let current = get_task(&connection, &task_id).unwrap();
+        assert_eq!(current.memo, memo);
+        assert_eq!(current.version, before.version + 1);
+        assert_eq!(current.state, before.state);
+        assert_eq!(current.completed_at, before.completed_at);
+        assert_eq!(changed.source_revision, forest_before.source_revision + 1);
+        assert_eq!(changed.hierarchy_revision, forest_before.hierarchy_revision);
+        assert_eq!(changed.queue_revision, queue_before.queue_revision);
+        assert_eq!(
+            changed.undo_status.operation_kind.as_deref(),
+            Some("memo-update")
+        );
+
+        let events = db::task_history_events(&connection, &task_id).unwrap();
+        let memo_event = events
+            .iter()
+            .find(|event| event.event_type == "task-memo-updated")
+            .expect("memo event");
+        assert_eq!(memo_event.payload["hasMemo"], true);
+        assert_eq!(memo_event.payload["scalarLength"], memo.chars().count());
+        assert!(!memo_event.payload.to_string().contains(memo));
+
+        let status_before_noop = get_undo_status(&connection).unwrap();
+        let no_op = update_task_memo(&mut connection, &task_id, memo, current.version, &at(2))
+            .expect("unchanged memo no-op");
+        assert_eq!(no_op.source_revision, changed.source_revision);
+        assert_eq!(no_op.hierarchy_revision, changed.hierarchy_revision);
+        assert_eq!(no_op.queue_revision, changed.queue_revision);
+        assert_eq!(no_op.undo_revision, changed.undo_revision);
+        assert_eq!(get_undo_status(&connection).unwrap(), status_before_noop);
+        assert_eq!(
+            db::task_history_events(&connection, &task_id)
+                .unwrap()
+                .len(),
+            events.len()
+        );
+    }
+
+    #[test]
+    fn memo_update_rejects_stale_time_and_scalar_limit_without_partial_change() {
+        let mut connection = connection();
+        let task = create(&mut connection, "memo task", 0);
+        let before = get_task(&connection, &task.id).unwrap();
+        let revisions = (
+            db::source_revision(&connection).unwrap(),
+            db::hierarchy_revision(&connection).unwrap(),
+            db::queue_revision(&connection).unwrap(),
+            db::undo_revision(&connection).unwrap(),
+        );
+        let status = get_undo_status(&connection).unwrap();
+        let too_long = "🙂".repeat(4_001);
+        for (memo, expected_version, instant_value, code) in [
+            ("stale", before.version - 1, at(1), "stale-version"),
+            (
+                "invalid time",
+                before.version,
+                "not-an-instant".to_owned(),
+                "invalid-effective-instant",
+            ),
+        ] {
+            let error = update_task_memo(
+                &mut connection,
+                &task.id,
+                memo,
+                expected_version,
+                &instant_value,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, code);
+        }
+        let error = update_task_memo(&mut connection, &task.id, &too_long, before.version, &at(1))
+            .unwrap_err();
+        assert_eq!(error.code, "invalid-memo");
+        assert_eq!(get_task(&connection, &task.id).unwrap(), before);
+        assert_eq!(get_undo_status(&connection).unwrap(), status);
+        assert_eq!(
+            revisions,
+            (
+                db::source_revision(&connection).unwrap(),
+                db::hierarchy_revision(&connection).unwrap(),
+                db::queue_revision(&connection).unwrap(),
+                db::undo_revision(&connection).unwrap(),
+            )
+        );
+    }
+
+    #[test]
+    fn memo_update_allows_completed_tasks_and_undo_is_lifo_with_other_operations() {
+        let mut connection = connection();
+        let created = create(&mut connection, "memo task", 0);
+        let completed =
+            complete_task(&mut connection, &created.id, created.version, &at(1)).unwrap();
+        let memo_change = update_task_memo(
+            &mut connection,
+            &created.id,
+            "completed memo",
+            completed.changed_tasks[0].version,
+            &at(2),
+        )
+        .unwrap();
+        let memo_version = get_task(&connection, &created.id).unwrap().version;
+        let renamed = rename_task(
+            &mut connection,
+            &created.id,
+            "renamed",
+            memo_version,
+            &at(3),
+        )
+        .unwrap();
+        let rename_token = get_undo_status(&connection)
+            .unwrap()
+            .operation_token
+            .unwrap();
+        undo_last_task_operation(&mut connection, &rename_token, &at(4)).unwrap();
+        let after_rename_undo = get_task(&connection, &created.id).unwrap();
+        assert_eq!(after_rename_undo.title, "memo task");
+        assert_eq!(after_rename_undo.memo, "completed memo");
+
+        let memo_token = get_undo_status(&connection)
+            .unwrap()
+            .operation_token
+            .unwrap();
+        assert_eq!(memo_token, memo_change.undo_status.operation_token.unwrap());
+        undo_last_task_operation(&mut connection, &memo_token, &at(5)).unwrap();
+        let restored = get_task(&connection, &created.id).unwrap();
+        assert_eq!(restored.memo, "");
+        assert_eq!(restored.state, TaskState::Completed);
+        assert!(restored.version > renamed.version);
+    }
+
+    #[test]
+    fn memo_survives_delete_restore_and_restart() {
+        let path = std::env::temp_dir().join(format!("gantt-memo-{}.db", db::new_id()));
+        let task_id;
+        {
+            let mut connection = db::open_database(&path).unwrap();
+            let created =
+                create_task_in_hierarchy(&mut connection, "memo task", None, None, 0, &at(0))
+                    .unwrap();
+            task_id = created.changed_tasks[0].id.clone();
+            update_task_memo(&mut connection, &task_id, "restart-safe", 0, &at(1)).unwrap();
+        }
+        {
+            let mut connection = db::open_database(&path).unwrap();
+            let task = get_task(&connection, &task_id).unwrap();
+            assert_eq!(task.memo, "restart-safe");
+            let forest = get_task_forest(&connection, 20).unwrap();
+            let deleted = delete_task_subtree(
+                &mut connection,
+                &task_id,
+                task.version,
+                forest.hierarchy_revision,
+                &at(2),
+            )
+            .unwrap();
+            let token = deleted.undo_status.operation_token.unwrap();
+            undo_last_task_operation(&mut connection, &token, &at(3)).unwrap();
+            assert_eq!(
+                get_task(&connection, &task_id).unwrap().memo,
+                "restart-safe"
+            );
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn memo_update_migration_is_idempotent_and_legacy_undo_snapshots_default_memo() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE metadata (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+                 INSERT INTO metadata (key, value) VALUES ('queue_revision', '7');
+                 INSERT INTO metadata (key, value) VALUES ('source_revision', '9');
+                 CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    title TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    version INTEGER NOT NULL
+                 );
+                 INSERT INTO tasks VALUES ('legacy', 'Legacy', 'queued', '2026-01-01T00:00:00Z', NULL, 4);",
+            )
+            .unwrap();
+        infrastructure::migrate(&connection).unwrap();
+        let revisions = (
+            infrastructure::source_revision(&connection).unwrap(),
+            infrastructure::queue_revision(&connection).unwrap(),
+        );
+        assert_eq!(get_task(&connection, "legacy").unwrap().memo, "");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'memo'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        infrastructure::migrate(&connection).unwrap();
+        assert_eq!(
+            revisions,
+            (
+                infrastructure::source_revision(&connection).unwrap(),
+                infrastructure::queue_revision(&connection).unwrap(),
+            )
+        );
+
+        let legacy_json = r#"{
+            "tasks":[{"id":"legacy","title":"Legacy","state":"queued","created_at":"2026-01-01T00:00:00Z","completed_at":null,"version":4}],
+            "queue_entries":[],"hierarchy_entries":[],"sessions":[],"events":[]
+        }"#;
+        let snapshot: ObservableSnapshot = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(snapshot.tasks[0].memo, "");
+    }
+
+    #[test]
+    fn memo_update_persistence_failure_rolls_back_body_event_and_revisions() {
+        let mut connection = connection();
+        let task = create(&mut connection, "memo task", 0);
+        let before = get_task(&connection, &task.id).unwrap();
+        let revisions = (
+            db::source_revision(&connection).unwrap(),
+            db::hierarchy_revision(&connection).unwrap(),
+            db::queue_revision(&connection).unwrap(),
+            db::undo_revision(&connection).unwrap(),
+        );
+        let event_count = db::task_history_events(&connection, &task.id)
+            .unwrap()
+            .len();
+        let status = get_undo_status(&connection).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_memo_undo BEFORE INSERT ON undo_journal
+                 BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+            )
+            .unwrap();
+        let error = update_task_memo(
+            &mut connection,
+            &task.id,
+            "must roll back",
+            before.version,
+            &at(1),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "persistence-failure");
+        assert_eq!(get_task(&connection, &task.id).unwrap(), before);
+        assert_eq!(
+            db::task_history_events(&connection, &task.id)
+                .unwrap()
+                .len(),
+            event_count
+        );
+        assert_eq!(
+            revisions,
+            (
+                db::source_revision(&connection).unwrap(),
+                db::hierarchy_revision(&connection).unwrap(),
+                db::queue_revision(&connection).unwrap(),
+                db::undo_revision(&connection).unwrap(),
+            )
+        );
+        assert_eq!(get_undo_status(&connection).unwrap(), status);
     }
 }

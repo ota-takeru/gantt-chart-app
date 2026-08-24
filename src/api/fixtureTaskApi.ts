@@ -22,7 +22,7 @@ import {
   type WorkSessionPage,
 } from "./types";
 
-export type PreviewVariant = "typical" | "dense" | "no-active" | "empty" | "error" | "only-completed";
+export type PreviewVariant = "typical" | "dense" | "no-active" | "empty" | "error" | "only-completed" | "deep";
 
 const PREVIEW_NOW = "2026-08-23T06:12:00.000Z";
 const DEFAULT_DATE = "2026-08-23T00:00:00.000Z";
@@ -43,7 +43,7 @@ function copy<T>(value: T): T {
 }
 
 function makeTask(id: string, title: string, state: TaskSnapshot["state"], version = 1, extra: Partial<TaskSnapshot> = {}): TaskSnapshot {
-  return { id, title, state, version, createdAt: DEFAULT_DATE, ...extra };
+  return { id, title, state, version, createdAt: DEFAULT_DATE, memo: "", ...extra };
 }
 
 function makeSession(id: string, taskId: string, startedAt: string, endedAt?: string, endReason?: WorkSession["endReason"]): WorkSession {
@@ -143,12 +143,42 @@ function buildDense(): StaticFixture {
   return buildFixture(tasks, [], events, 902, parentById);
 }
 
+function buildDeep(): StaticFixture {
+  const longTitle = "深い階層の長い日本語タイトル。設計レビューの観点と検証手順を確認するためのサンプル作業。".repeat(4).slice(0, 240);
+  const tasks = Array.from({ length: 9 }, (_, depth) => makeTask(
+    `deep-task-${depth}`,
+    depth === 0 ? "深い階層の調査パッケージ" : depth === 8 ? longTitle : `深度 ${depth} の確認作業`,
+    depth === 0 ? "active" : "queued",
+    1,
+    { createdAt: new Date(Date.parse(PREVIEW_NOW) - (depth + 1) * 60 * 60 * 1000).toISOString() },
+  ));
+  const parentById: Record<string, string | undefined> = {};
+  for (let depth = 1; depth < tasks.length; depth += 1) parentById[tasks[depth].id] = tasks[depth - 1].id;
+  const sessions = [makeSession("session-deep-root", tasks[0].id, "2026-08-23T04:12:00.000Z")];
+  return buildFixture(tasks, sessions, [], 128, parentById);
+}
+
 function buildFixture(tasks: TaskSnapshot[], sessions: WorkSession[], events: LifecycleEvent[], sourceRevision: number, parentById: Record<string, string | undefined> = {}): StaticFixture {
   return { tasks: copy(tasks), entries: buildEntries(tasks, parentById), sessions: copy(sessions), events: copy(events), queueRevision: sourceRevision, sourceRevision, hierarchyRevision: sourceRevision === 0 ? 0 : Math.max(1, Math.floor(sourceRevision / 10)) };
 }
 
 function staticError(code: string, message: string, detail?: string): never {
   throw { code, message, detail };
+}
+
+function validateFixtureInstant(value: string, task: TaskSnapshot, events: LifecycleEvent[]): void {
+  const instant = Date.parse(value);
+  if (!Number.isFinite(instant)) staticError("invalid-effective-instant", "Instant must be RFC3339", value);
+  const createdAt = Date.parse(task.createdAt);
+  if (Number.isFinite(createdAt) && instant < createdAt) {
+    staticError("invalid-effective-instant", "Effective instant precedes the task creation boundary");
+  }
+  for (const event of events.filter((candidate) => candidate.taskId === task.id)) {
+    const occurredAt = Date.parse(event.occurredAt);
+    if (Number.isFinite(occurredAt) && instant < occurredAt) {
+      staticError("invalid-effective-instant", "Effective instant precedes an affected event boundary");
+    }
+  }
 }
 
 function isRemaining(task: TaskSnapshot): boolean {
@@ -272,6 +302,10 @@ class StaticFixtureTaskApi implements TaskApi {
     };
   }
 
+  private syncTasks(): void {
+    this.fixture.tasks = this.fixture.entries.map((entry) => copy(entry.task));
+  }
+
   async createTask(title: string): Promise<TaskSnapshot> { this.controlledFailure(); return makeTask("legacy-preview-created", title.trim(), "queued"); }
   async renameTask(taskId: string, title: string, expectedVersion: number): Promise<TaskSnapshot> {
     this.controlledFailure();
@@ -285,6 +319,42 @@ class StaticFixtureTaskApi implements TaskApi {
     this.recordUndo("rename", `「${previousTitle}」の名前変更`, [taskId], before);
     return copy(value);
   }
+  async updateTaskMemo(taskId: string, memo: string, expectedTaskVersion: number, instant = PREVIEW_NOW): Promise<ReversibleChangeResult> {
+    this.controlledFailure();
+    if (Array.from(memo).length > 4000) staticError("invalid-memo", "Memo must contain at most 4000 Unicode scalar values");
+    const value = this.task(taskId);
+    if (value.version !== expectedTaskVersion) staticError("stale-version", "Task version is stale");
+    validateFixtureInstant(instant, value, this.fixture.events);
+    this.syncTasks();
+    const sourceRevision = this.fixture.sourceRevision;
+    const hierarchyRevision = this.fixture.hierarchyRevision;
+    const queueRevision = this.fixture.queueRevision;
+    if (value.memo === memo) {
+      return this.reversibleResult("preview-memo-noop", [taskId]);
+    }
+    const before = copy(this.fixture);
+    const operationId = `preview-memo-${this.operationSequence + 1}`;
+    value.memo = memo;
+    value.version += 1;
+    this.fixture.events.push({
+      id: `preview-event-${operationId}`,
+      taskId,
+      operationId,
+      eventType: "task-memo-updated",
+      occurredAt: instant,
+      payload: { hasMemo: memo.length > 0, scalarLength: Array.from(memo).length },
+    });
+    this.fixture.sourceRevision += 1;
+    this.syncTasks();
+    this.recordUndo("memo-update", `「${value.title}」のメモを更新`, [taskId], before);
+    const result = this.reversibleResult(operationId, [taskId]);
+    // A memo update is a source-only mutation; retain the hierarchy and queue
+    // revisions from before the save in the returned result.
+    result.hierarchyRevision = hierarchyRevision;
+    result.queueRevision = queueRevision;
+    result.sourceRevision = sourceRevision + 1;
+    return result;
+  }
   async startTask(taskId: string): Promise<LifecycleResult> { this.controlledFailure(); const value = this.task(taskId); value.state = "active"; value.version += 1; return { operationId: "preview-operation", changedTasks: [copy(value)], queueRevision: this.fixture.queueRevision, sourceRevision: this.fixture.sourceRevision }; }
   async switchFocus(fromTaskId: string, toTaskId: string, _expectedVersions: SwitchExpectedVersions, _placement?: QueuePlacement, _expectedQueueRevision?: number): Promise<LifecycleResult> { this.controlledFailure(); return { operationId: "preview-operation", changedTasks: [copy(this.task(fromTaskId)), copy(this.task(toTaskId))], queueRevision: this.fixture.queueRevision, sourceRevision: this.fixture.sourceRevision }; }
   async pauseTask(taskId: string): Promise<LifecycleResult> { this.controlledFailure(); const value = this.task(taskId); value.state = "paused"; value.version += 1; return { operationId: "preview-operation", changedTasks: [copy(value)], queueRevision: this.fixture.queueRevision, sourceRevision: this.fixture.sourceRevision }; }
@@ -294,9 +364,33 @@ class StaticFixtureTaskApi implements TaskApi {
   async getTask(taskId: string) { return copy(this.task(taskId)); }
   async getNextQueue(_afterCursor: string | undefined, limit: number): Promise<QueuePage> { const entries = this.fixture.entries.filter((entry) => isRemaining(entry.task)).slice(0, limit).map((entry, index) => ({ taskId: entry.task.id, task: copy(entry.task), position: index + 1 })); return { entries, taskIds: entries.map((entry) => entry.taskId), queueRevision: this.fixture.queueRevision, sourceRevision: this.fixture.sourceRevision }; }
   async moveQueuedTask(taskId: string, _beforeTaskId: string | undefined, _expectedQueueRevision: number): Promise<QueueChangeResult> { this.controlledFailure(); return { operationId: "preview-operation", taskId, position: this.entry(taskId).position, queueRevision: this.fixture.queueRevision, sourceRevision: this.fixture.sourceRevision }; }
-  async getTaskActualHistory(taskId: string): Promise<ActualHistorySummary> { const sessions = this.fixture.sessions.filter((value) => value.taskId === taskId); return { taskId, actualStartAt: sessions[0]?.startedAt, latestCompletionAt: this.task(taskId).completedAt, totalClosedDurationMs: 0, currentOpenSession: copy(sessions.find((value) => !value.endedAt)), sessionCount: sessions.length, sourceRevision: this.fixture.sourceRevision }; }
+  async getTaskActualHistory(taskId: string): Promise<ActualHistorySummary> {
+    const sessions = this.fixture.sessions.filter((value) => value.taskId === taskId);
+    const totalClosedDurationMs = sessions.reduce((total, session) => {
+      if (!session.endedAt) return total;
+      const startedMs = Date.parse(session.startedAt);
+      const endedMs = Date.parse(session.endedAt);
+      return Number.isFinite(startedMs) && Number.isFinite(endedMs) ? total + Math.max(0, endedMs - startedMs) : total;
+    }, 0);
+    return { taskId, actualStartAt: sessions[0]?.startedAt, latestCompletionAt: this.task(taskId).completedAt, totalClosedDurationMs, currentOpenSession: copy(sessions.find((value) => !value.endedAt)), sessionCount: sessions.length, sourceRevision: this.fixture.sourceRevision };
+  }
   async getTaskSessions(taskId: string, _afterCursor: string | undefined, limit: number): Promise<WorkSessionPage> { return { sessions: copy(this.fixture.sessions.filter((value) => value.taskId === taskId).slice(0, limit)), sourceRevision: this.fixture.sourceRevision }; }
-  async getHistoryByActualRange(_rangeStart: string, _rangeEnd: string, _afterCursor: string | undefined, _limit: number): Promise<ActualHistoryPage> { return { items: [], sessions: [], events: [], sourceRevision: this.fixture.sourceRevision }; }
+  async getHistoryByActualRange(rangeStart: string, rangeEnd: string, _afterCursor: string | undefined, limit: number): Promise<ActualHistoryPage> {
+    const start = Date.parse(rangeStart);
+    const end = Date.parse(rangeEnd);
+    const events = this.fixture.events
+      .filter((event) => {
+        const occurred = Date.parse(event.occurredAt);
+        return (!Number.isFinite(start) || occurred >= start) && (!Number.isFinite(end) || occurred < end);
+      })
+      .slice(0, limit);
+    return {
+      items: events.map((event) => ({ kind: "event", at: event.occurredAt, event: copy(event) })),
+      sessions: [],
+      events: copy(events),
+      sourceRevision: this.fixture.sourceRevision,
+    };
+  }
   async getFocusProjection(_rangeStart: string, _rangeEnd: string, currentInstant: string, _nextCursor: string | undefined, _limits: { segmentLimit: number; nextWorkLimit: number }): Promise<FocusProjection> { return { segments: [], currentFocus: (await this.getCurrentFocus()) ?? undefined, nextWork: await this.getNextQueue(undefined, 12), metadata: { sourceRevision: this.fixture.sourceRevision, queryInstant: currentInstant, truncated: false, queryDurationMs: 0 } }; }
   async getDaySummary(localDate: string, timeZone: string, currentInstant: string, _cursor: string | undefined, _limit: number): Promise<DaySummaryPage> { return { localDate, timeZone, dayStartUtc: `${localDate}T00:00:00.000Z`, dayEndUtc: `${localDate}T23:59:59.999Z`, tasks: [], sourceRevision: this.fixture.sourceRevision, truncated: false, queryInstant: currentInstant, queryDurationMs: 0 }; }
   async getArchiveSummary(localDateStart: string, localDateEnd: string, timeZone: string, currentInstant: string, _cursor: string | undefined, _limit: number): Promise<ArchiveSummaryPage> { return { localDateStart, localDateEnd, timeZone, days: [], sourceRevision: this.fixture.sourceRevision, truncated: false, queryInstant: currentInstant, queryDurationMs: 0 }; }
@@ -444,12 +538,12 @@ class StaticFixtureTaskApi implements TaskApi {
 }
 
 export function createFixtureTaskApi(variant: PreviewVariant = "empty"): TaskApi {
-  const fixture = variant === "empty" ? buildFixture([], [], [], 0) : variant === "dense" ? buildDense() : variant === "no-active" ? buildNoActive() : variant === "only-completed" ? buildOnlyCompleted() : buildTypical();
+  const fixture = variant === "empty" ? buildFixture([], [], [], 0) : variant === "dense" ? buildDense() : variant === "no-active" ? buildNoActive() : variant === "only-completed" ? buildOnlyCompleted() : variant === "deep" ? buildDeep() : buildTypical();
   return new StaticFixtureTaskApi(variant, fixture);
 }
 
 export function previewVariantFromLocation(): PreviewVariant | undefined {
   if (typeof window === "undefined") return undefined;
   const value = new URLSearchParams(window.location.search).get("preview");
-  return value === "typical" || value === "dense" || value === "no-active" || value === "empty" || value === "error" || value === "only-completed" ? value : undefined;
+  return value === "typical" || value === "dense" || value === "no-active" || value === "empty" || value === "error" || value === "only-completed" || value === "deep" ? value : undefined;
 }

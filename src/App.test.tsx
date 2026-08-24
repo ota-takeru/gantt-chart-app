@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { createFixtureTaskApi } from "./api/fixtureTaskApi";
 
-function renderPreview(variant: "typical" | "dense" | "no-active" | "empty" | "error" | "only-completed" = "typical") {
+function renderPreview(variant: "typical" | "dense" | "no-active" | "empty" | "error" | "only-completed" | "deep" = "typical") {
   const api = createFixtureTaskApi(variant);
   render(<App api={api} />);
   return api;
@@ -20,6 +20,16 @@ function rowFor(title: string): HTMLElement {
 
 function timelineCell(taskId: string): HTMLElement {
   return document.querySelector(`[data-timeline-cell="${taskId}"]`) as HTMLElement;
+}
+
+function pocketFor(taskId: string): HTMLElement {
+  return document.querySelector(`.history-pocket[data-pocket-id="${taskId}"]`) as HTMLElement;
+}
+
+async function expandPocket(taskId: string): Promise<HTMLElement> {
+  const pocket = pocketFor(taskId);
+  if (!pocket.classList.contains("is-expanded")) await userEvent.click(pocket.querySelector(".pocket-caption") as HTMLElement);
+  return pocket;
 }
 
 function timelineRuler(): HTMLElement {
@@ -128,9 +138,10 @@ describe("history-left / NOW-right surface", () => {
     renderPreview("dense");
     await ready();
     expect(document.querySelectorAll(".history-pocket").length).toBe(20);
-    expect(document.querySelectorAll(".history-pocket .pocket-mark").length).toBe(60);
+    expect(document.querySelectorAll(".history-pocket .pocket-member-row").length).toBe(0);
+    expect(document.querySelectorAll(".history-pocket .pocket-mark").length).toBe(0);
     expect(screen.queryByRole("button", { name: /完了済み/ })).not.toBeInTheDocument();
-    await userEvent.click(document.querySelector(".history-pocket[data-pocket-id='dense-completed-root-1'] .pocket-caption") as HTMLElement);
+    await expandPocket("dense-completed-root-1");
     expect(document.querySelectorAll(".history-pocket.is-expanded .pocket-mark").length).toBe(30);
   });
 
@@ -139,19 +150,24 @@ describe("history-left / NOW-right surface", () => {
     await ready();
     const pocket = document.querySelector(".history-pocket") as HTMLElement;
     const caption = pocket.querySelector(".pocket-caption") as HTMLElement;
-    const lanes = pocket.querySelector(".pocket-lanes") as HTMLElement;
     expect(caption).toBe(pocket.firstElementChild);
     expect(caption.querySelector(".pocket-caption-chevron")).toHaveTextContent("▸");
     expect(caption.querySelector(".pocket-caption-title")).toHaveTextContent(/.+/);
     expect(caption.querySelector(".pocket-caption-count")).toHaveTextContent(/\d+件/);
     expect(caption.textContent).not.toContain("完了");
-    expect(lanes).toBe(caption.nextElementSibling);
-    expect(getComputedStyle(lanes).marginLeft).toBe("8px");
-    expect(getComputedStyle(lanes).borderLeftWidth).toBe("2px");
+    expect(caption).toHaveAttribute("aria-expanded", "false");
+    expect(caption).toHaveAttribute("id", "history-pocket-caption-task-completed");
+    expect(pocket.querySelector(".pocket-lanes")).toBeNull();
+    expect(pocket.querySelectorAll(".pocket-member-row")).toHaveLength(0);
 
     await userEvent.click(caption);
     expect(pocket).toHaveClass("is-expanded");
     expect(caption.querySelector(".pocket-caption-chevron")).toHaveTextContent("▾");
+    expect(caption).toHaveAttribute("aria-expanded", "true");
+    const lanes = pocket.querySelector(".pocket-lanes") as HTMLElement;
+    expect(lanes).toBe(caption.nextElementSibling);
+    expect(getComputedStyle(lanes).marginLeft).toBe("8px");
+    expect(getComputedStyle(lanes).borderLeftWidth).toBe("2px");
   });
 
   it("keeps the dense pocket heading and lane grouping bounded for every pocket", async () => {
@@ -161,8 +177,11 @@ describe("history-left / NOW-right surface", () => {
     expect(pockets).toHaveLength(20);
     expect(pockets.every((pocket) => pocket.firstElementChild?.matches(".pocket-caption"))).toBe(true);
     expect(pockets.every((pocket) => pocket.querySelector(".pocket-caption-count")?.textContent?.match(/^\d+件$/))).toBe(true);
-    expect(pockets.every((pocket) => pocket.querySelector(".pocket-caption")?.nextElementSibling?.matches(".pocket-lanes"))).toBe(true);
-    expect(pockets.every((pocket) => getComputedStyle(pocket.querySelector(".pocket-lanes") as HTMLElement).marginLeft === "8px")).toBe(true);
+    expect(pockets.every((pocket) => pocket.querySelector(".pocket-lanes") === null)).toBe(true);
+    expect(pockets.every((pocket) => pocket.querySelectorAll(".pocket-member-row").length === 0)).toBe(true);
+    const expandedPocket = await expandPocket("dense-completed-root-1");
+    expect(expandedPocket.querySelector(".pocket-caption")?.nextElementSibling?.matches(".pocket-lanes")).toBe(true);
+    expect(getComputedStyle(expandedPocket.querySelector(".pocket-lanes") as HTMLElement).marginLeft).toBe("8px");
   });
 
   it("keeps add, range, and reload in one desktop tab order with a two-tier narrow layout", async () => {
@@ -224,7 +243,11 @@ describe("history-left / NOW-right surface", () => {
   it("stacks completed pocket members with their titles and hierarchy marks", async () => {
     renderPreview("only-completed");
     await ready();
-    const pocket = document.querySelector(".history-pocket[data-pocket-id='only-completed-root']") as HTMLElement;
+    const pocket = pocketFor("only-completed-root");
+    expect(pocket.querySelectorAll(".pocket-member-row")).toHaveLength(0);
+    expect(pocket.querySelectorAll(".pocket-mark")).toHaveLength(0);
+    expect(pocket.querySelectorAll(".pocket-member-title")).toHaveLength(0);
+    await expandPocket("only-completed-root");
     expect(pocket.querySelectorAll(".pocket-member-row")).toHaveLength(2);
     expect(within(pocket).getByRole("button", { name: "完了した調査をまとめるを選択" })).toBeInTheDocument();
     expect(within(pocket).getByRole("button", { name: "完了した確認項目を選択" })).toBeInTheDocument();
@@ -232,9 +255,25 @@ describe("history-left / NOW-right surface", () => {
     expect(timelineCell("only-completed-child")).toHaveAttribute("data-start-ms", String(Date.parse("2026-08-22T03:30:00.000Z")));
   });
 
+  it("expands a collapsed pocket when keyboard selection enters a hidden member", async () => {
+    renderPreview("only-completed");
+    await ready();
+    const history = screen.getByRole("tree");
+    const pocket = pocketFor("only-completed-root");
+    history.focus();
+    fireEvent.keyDown(history, { key: "Home" });
+    expect(pocket).not.toHaveClass("is-expanded");
+    expect(history).toHaveAttribute("aria-activedescendant", "history-pocket-caption-only-completed-root");
+    fireEvent.keyDown(history, { key: "ArrowDown" });
+    expect(pocket).toHaveClass("is-expanded");
+    expect(history).toHaveAttribute("aria-activedescendant", "history-mark-only-completed-child");
+    expect(document.querySelector("[data-selected-readout='only-completed-child']")).toBeInTheDocument();
+  });
+
   it("navigates history as one keyboard composite without adding a tab stop per mark", async () => {
     renderPreview("typical");
     await ready();
+    await expandPocket("task-completed");
     const history = screen.getByRole("tree");
     const marks = Array.from(document.querySelectorAll<HTMLElement>(".pocket-mark"));
     expect(marks.length).toBeGreaterThan(0);
@@ -462,6 +501,9 @@ describe("history-left / NOW-right surface", () => {
     const leaf = rowFor("明日の調査メモを残す");
     await userEvent.click(within(leaf).getByRole("button", { name: /明日の調査メモを残すを完了にする/ }));
     await waitFor(() => expect(screen.getByRole("button", { name: /明日の調査メモを残すの完了履歴/ })).toBeInTheDocument());
+    expect(document.querySelector("[data-selected-readout='task-next-6']")).toBeNull();
+    expect(screen.getByRole("tree")).toHaveAttribute("aria-activedescendant", "history-pocket-caption-task-next-6");
+    await expandPocket("task-next-6");
     await userEvent.click(screen.getByRole("button", { name: /明日の調査メモを残す。作成/ }));
     const detail = document.querySelector("[data-selected-readout='task-next-6']") as HTMLElement;
     await userEvent.click(within(detail).getByRole("button", { name: "削除" }));
@@ -481,6 +523,8 @@ describe("history-left / NOW-right surface", () => {
     await userEvent.click(within(leaf).getByRole("button", { name: /明日の調査メモを残すを完了にする/ }));
     await waitFor(() => expect(complete).toHaveBeenCalledWith("task-next-6", 1, expect.any(String)));
     await waitFor(() => expect(screen.getByRole("button", { name: /明日の調査メモを残すの完了履歴/ })).toBeInTheDocument());
+    await waitFor(() => expect(document.activeElement).toBe(pocketFor("task-next-6").querySelector(".pocket-caption")));
+    await expandPocket("task-next-6");
     await userEvent.click(screen.getByRole("button", { name: /明日の調査メモを残す。作成/ }));
     expect(screen.getByText("明日の調査メモを残す", { selector: "[data-selected-readout] strong" })).toBeInTheDocument();
     const completed = screen.getByRole("button", { name: "明日の調査メモを残すをNOWへ戻す" });
@@ -677,6 +721,7 @@ describe("history-left / NOW-right surface", () => {
   it("hides manual placement from completed history details", async () => {
     renderPreview("typical");
     await ready();
+    await expandPocket("task-completed");
     await userEvent.click(timelineCell("task-completed"));
     const detail = document.querySelector("[data-selected-readout='task-completed']") as HTMLElement;
     expect(detail).toBeInTheDocument();
@@ -695,6 +740,7 @@ describe("history-left / NOW-right surface", () => {
     expect(active.querySelector(".lifetime-bar")).toHaveClass("is-open");
     expect(document.querySelector('[data-row-id="task-api"] .now-hinge-cell')).toBeInTheDocument();
 
+    await expandPocket("task-completed");
     const completed = timelineCell("task-completed");
     expect(completed.dataset.startMs).toBe(String(Date.parse("2026-08-23T03:40:00.000Z")));
     expect(completed.dataset.endMs).toBe(String(Date.parse("2026-08-23T03:57:00.000Z")));
@@ -718,7 +764,10 @@ describe("history-left / NOW-right surface", () => {
     expect(Number(ruler.dataset.rangeEndMs)).toBeLessThanOrEqual(Number(ruler.dataset.nowMs));
 
     await userEvent.click(screen.getByRole("button", { name: "前へ" }));
-    expect(timelineRuler().querySelector(".ruler-ticks")?.textContent).toMatch(/8\/2[12]/);
+    const pannedLabels = Array.from(timelineRuler().querySelectorAll<HTMLElement>(".ruler-tick"), (tick) => tick.textContent ?? "");
+    expect(pannedLabels).toHaveLength(5);
+    expect(pannedLabels.every((label) => /^\d{1,2}\/\d{1,2} \d{2}:\d{2}$/.test(label))).toBe(true);
+    expect(pannedLabels).not.toContain("現在");
     expect(Number(timelineRuler().dataset.rangeEndMs)).toBeLessThanOrEqual(Number(timelineRuler().dataset.nowMs));
   });
 
@@ -737,6 +786,7 @@ describe("history-left / NOW-right surface", () => {
   it("shows a warning instead of fabricating a completed endpoint", async () => {
     renderPreview("typical");
     await ready();
+    await expandPocket("task-no-session");
     const missing = timelineCell("task-no-session");
     expect(missing.dataset.endMs).toBe("missing");
     expect(missing).toHaveClass("pocket-mark", "is-warning");
@@ -763,6 +813,8 @@ describe("history-left / NOW-right surface", () => {
     render(<App api={api} />);
     await ready();
     expect(timelineCell("task-api").querySelector(".lifetime-bar")).toHaveClass("is-clipped-left");
+    await expandPocket("task-completed");
+    await expandPocket("task-no-session");
     expect(timelineCell("task-completed")).toHaveClass("pocket-mark", "is-before");
     expect(timelineCell("task-completed")).toHaveTextContent("◁");
     expect(timelineCell("task-no-session")).toHaveClass("pocket-mark", "is-after");
@@ -872,6 +924,7 @@ describe("history-left / NOW-right surface", () => {
     expect(timelineRuler().dataset.rangeEndMs).toBe(timelineRuler().dataset.nowMs);
     expect(scroll.mock.instances.at(-1)).toHaveAttribute("id", "history-task-task-api");
 
+    await expandPocket("task-completed");
     await userEvent.click(timelineCell("task-completed"));
     await userEvent.click(historyJump);
     expect(scroll.mock.instances.at(-1)).toHaveAttribute("id", "history-mark-task-completed");
@@ -959,6 +1012,7 @@ describe("history-left / NOW-right surface", () => {
     render(<App api={api} />);
     await ready();
     expect(timelineCell("task-next-6").querySelector(".lifetime-point")).toHaveClass("is-open");
+    await expandPocket("task-completed");
     const completedPoint = timelineCell("task-completed");
     expect(completedPoint).toHaveClass("is-point", "is-closed");
     expect(completedPoint?.getAttribute("style")).not.toContain("width");
@@ -980,6 +1034,7 @@ describe("history-left / NOW-right surface", () => {
     await userEvent.click(timelineCell("task-api"));
     expect(document.querySelector("[data-selected-readout]")).toBeNull();
 
+    await expandPocket("task-completed");
     await userEvent.click(timelineCell("task-completed"));
     const detail = document.querySelector("[data-selected-readout='task-completed']") as HTMLElement;
     expect(detail).toBeInTheDocument();
@@ -999,6 +1054,8 @@ describe("history-left / NOW-right surface", () => {
   it("moves the local completed detail when a different pocket is selected", async () => {
     renderPreview("typical");
     await ready();
+    await expandPocket("task-completed");
+    await expandPocket("task-no-session");
     await userEvent.click(timelineCell("task-completed"));
     expect(document.querySelector("[data-selected-readout='task-completed']")).toBeInTheDocument();
 
@@ -1012,6 +1069,7 @@ describe("history-left / NOW-right surface", () => {
   it("keeps completed detail delete confirmation in its existing local flow", async () => {
     renderPreview("typical");
     await ready();
+    await expandPocket("task-completed");
     await userEvent.click(timelineCell("task-completed"));
     const detail = document.querySelector("[data-selected-readout='task-completed']") as HTMLElement;
     await userEvent.click(within(detail).getByRole("button", { name: "削除" }));
@@ -1024,6 +1082,7 @@ describe("history-left / NOW-right surface", () => {
   it("shows the same local detail when keyboard navigation selects completed history", async () => {
     renderPreview("typical");
     await ready();
+    await expandPocket("task-completed");
     const history = screen.getByRole("tree");
     history.focus();
     fireEvent.keyDown(history, { key: "Home" });
@@ -1034,5 +1093,223 @@ describe("history-left / NOW-right surface", () => {
     expect(detail).toBeInTheDocument();
     expect(detail.closest(".pocket-branch")).toBeInTheDocument();
     expect(document.querySelector("[data-selected-readout='task-api']")).toBeNull();
+  });
+
+  it("loads actual work lazily and distinguishes a zero aggregate from no session record", async () => {
+    const api = createFixtureTaskApi("typical");
+    const history = vi.spyOn(api, "getTaskActualHistory");
+    render(<App api={api} />);
+    await ready();
+    expect(history).not.toHaveBeenCalled();
+
+    await expandPocket("task-completed");
+    await userEvent.click(timelineCell("task-completed"));
+    await waitFor(() => expect(history).toHaveBeenCalledWith("task-completed"));
+    await waitFor(() => expect(document.querySelector("[data-selected-readout='task-completed'] [data-actual-history-state='ready']")).toHaveTextContent("17分"));
+    expect(document.querySelector("[data-selected-readout='task-completed'] [data-actual-duration-ms='1020000']")).toBeInTheDocument();
+
+    await expandPocket("task-no-session");
+    await userEvent.click(timelineCell("task-no-session"));
+    await waitFor(() => expect(document.querySelector("[data-selected-readout='task-no-session'] [data-actual-history-state='no-record']")).toHaveTextContent("記録なし"));
+    expect(document.querySelector("[data-selected-readout='task-no-session'] [data-actual-history-state='no-record']")).not.toHaveTextContent("0分");
+  });
+
+  it("keeps the completed detail while actual history fails and supports retry", async () => {
+    const api = createFixtureTaskApi("typical");
+    const original = api.getTaskActualHistory.bind(api);
+    const history = vi.spyOn(api, "getTaskActualHistory");
+    history.mockRejectedValueOnce({ code: "persistence-failure", message: "履歴サービス停止" }).mockImplementationOnce(original);
+    render(<App api={api} />);
+    await ready();
+    await expandPocket("task-completed");
+    await userEvent.click(timelineCell("task-completed"));
+    const detail = () => document.querySelector("[data-selected-readout='task-completed']") as HTMLElement;
+    await waitFor(() => expect(detail().querySelector("[data-actual-history-state='error']")).toBeInTheDocument());
+    expect(detail()).toBeInTheDocument();
+    await userEvent.click(within(detail()).getByRole("button", { name: "ログのタイムアウト境界を確認の実績履歴を再試行" }));
+    await waitFor(() => expect(detail().querySelector("[data-actual-history-state='ready']")).toHaveTextContent("17分"));
+    expect(history).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps depth 0 through 8 distinct and exposes the selected deep ancestry", async () => {
+    renderPreview("deep");
+    await ready();
+    const branches = Array.from(document.querySelectorAll<HTMLElement>(".tree-branch[data-depth]"));
+    expect(new Set(branches.map((branch) => branch.dataset.depth))).toEqual(new Set(["0", "1", "2", "3", "4", "5", "6", "7", "8"]));
+    const deepRow = document.querySelector("[data-row-id='deep-task-8']") as HTMLElement;
+    expect(deepRow).toBeInTheDocument();
+    expect(deepRow.closest(".tree-branch")).toHaveClass("depth-8");
+    expect(deepRow.closest(".tree-branch")).toHaveAttribute("data-depth", "8");
+    expect(deepRow.querySelector(".depth-cue")).toHaveTextContent("階層 8");
+
+    await userEvent.click(timelineCell("deep-task-8"));
+    const path = document.querySelector("[data-ancestry-path='deep-task-8']") as HTMLElement;
+    expect(path).toBeInTheDocument();
+    expect(path.textContent).toContain("深い階層の調査パッケージ");
+    expect(path.textContent).toContain("深度 1");
+    expect(path.textContent).toContain("深度 7");
+  });
+
+  it("uses the fluid surface and one shared widened column split", async () => {
+    renderPreview("empty");
+    await ready();
+    const styles = loadedStyles();
+    expect(styles).not.toContain("1120px");
+    expect(styles).toMatch(/\.history-composite\s*\{[^}]*--history-left:\s*calc\(58% - 18px\)[^}]*--history-right:\s*calc\(42% - 18px\)/);
+    expect(styles).toMatch(/\.undo-receipt\s*\{[^}]*--history-left:\s*calc\(58% - 18px\)[^}]*--history-right:\s*calc\(42% - 18px\)/);
+  });
+
+  it("opens one memo dock from remaining and completed current-side origins with exact prefill", async () => {
+    const api = createFixtureTaskApi("typical");
+    const originalForest = await api.getTaskForest(5000);
+    const exactMemo = "  先頭の空白\n二行目🙂\t ";
+    vi.spyOn(api, "getTaskForest").mockResolvedValue({
+      ...originalForest,
+      entries: originalForest.entries.map((entry) => entry.task.id === "task-next-1" ? { ...entry, task: { ...entry.task, memo: exactMemo } } : entry),
+    });
+    render(<App api={api} />);
+    await ready();
+
+    const remainingAction = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
+    expect(rowFor("再現条件をテストケースにする").querySelector("[data-memo-presence='present']")).toBeInTheDocument();
+    await userEvent.click(remainingAction);
+    expect(document.querySelectorAll("[data-memo-modal]")).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "再現条件をテストケースにするのメモ" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "メモ本文" })).toHaveValue(exactMemo);
+    await userEvent.click(screen.getByRole("button", { name: "キャンセル" }));
+
+    await expandPocket("task-completed");
+    await userEvent.click(timelineCell("task-completed"));
+    const completedAction = screen.getByRole("button", { name: "ログのタイムアウト境界を確認のメモを編集" });
+    expect(completedAction.closest(".history-detail-row")).toBeInTheDocument();
+    await userEvent.click(completedAction);
+    expect(screen.getByRole("dialog", { name: "ログのタイムアウト境界を確認のメモ" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "メモ本文" })).toHaveValue("");
+  });
+
+  it("counts Unicode scalars, blocks 4,001 locally, and keeps unchanged save a no-op", async () => {
+    const api = renderPreview("typical");
+    const update = vi.spyOn(api, "updateTaskMemo");
+    await ready();
+    const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
+    await userEvent.click(origin);
+    const textarea = screen.getByRole("textbox", { name: "メモ本文" });
+    const count = document.querySelector("[data-memo-scalar-count]") as HTMLElement;
+
+    fireEvent.change(textarea, { target: { value: "🙂".repeat(4000) } });
+    expect(count).toHaveAttribute("data-memo-scalar-count", "4000");
+    expect(screen.getByRole("button", { name: "保存" })).not.toBeDisabled();
+    fireEvent.change(textarea, { target: { value: "🙂".repeat(4001) } });
+    expect(count).toHaveAttribute("data-memo-scalar-count", "4001");
+    expect(screen.getByText(/4,000 Unicodeスカラー以内/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(update).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "キャンセル" }));
+    await userEvent.click(origin);
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(update).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.activeElement).toBe(origin));
+  });
+
+  it("saves a changed memo, exposes the body-free undo receipt, clears, and undoes", async () => {
+    const api = renderPreview("typical");
+    const update = vi.spyOn(api, "updateTaskMemo");
+    await ready();
+    const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
+    await userEvent.click(origin);
+    const textarea = screen.getByRole("textbox", { name: "メモ本文" });
+    fireEvent.change(textarea, { target: { value: "保存するメモ\n二行目" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("task-next-1", "保存するメモ\n二行目", 1, expect.any(String)));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText(/メモを更新しました/)).toBeInTheDocument();
+    expect(screen.getByText(/「再現条件をテストケースにする」のメモを更新/)).toBeInTheDocument();
+    expect(screen.queryByText("保存するメモ\n二行目", { exact: true })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "元に戻す" }));
+    await waitFor(async () => expect((await api.getTask("task-next-1")).memo).toBe(""));
+
+    await userEvent.click(origin);
+    fireEvent.change(screen.getByRole("textbox", { name: "メモ本文" }), { target: { value: "消して保存" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("prevents duplicate pending saves and supports persistence retry with the same draft", async () => {
+    const api = renderPreview("typical");
+    const originalUpdate = api.updateTaskMemo.bind(api);
+    let resolveUpdate: ((result: Awaited<ReturnType<typeof originalUpdate>>) => void) | undefined;
+    const update = vi.spyOn(api, "updateTaskMemo").mockImplementation((...args) => new Promise((resolve, reject) => {
+      resolveUpdate = resolve;
+      void args;
+      void reject;
+    }));
+    await ready();
+    const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
+    await userEvent.click(origin);
+    fireEvent.change(screen.getByRole("textbox", { name: "メモ本文" }), { target: { value: "pending memo" } });
+    const save = screen.getByRole("button", { name: "保存" });
+    await userEvent.click(save);
+    await waitFor(() => expect(save).toBeDisabled());
+    await userEvent.click(save);
+    expect(update).toHaveBeenCalledTimes(1);
+    resolveUpdate?.(await originalUpdate("task-next-1", "pending memo", 1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await userEvent.click(origin);
+    fireEvent.change(screen.getByRole("textbox", { name: "メモ本文" }), { target: { value: "retry memo" } });
+    update.mockRejectedValueOnce({ code: "persistence-failure", message: "保存失敗" }).mockImplementation(originalUpdate);
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "再試行" })).toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: "メモ本文" })).toHaveValue("retry memo");
+    await userEvent.click(screen.getByRole("button", { name: "再試行" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("retains a stale draft until explicit reload, then saves with the refreshed base version", async () => {
+    const api = renderPreview("typical");
+    const originalUpdate = api.updateTaskMemo.bind(api);
+    const update = vi.spyOn(api, "updateTaskMemo").mockRejectedValueOnce({ code: "stale-version", message: "stale" }).mockImplementation(originalUpdate);
+    await ready();
+    const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
+    await userEvent.click(origin);
+    const textarea = screen.getByRole("textbox", { name: "メモ本文" });
+    fireEvent.change(textarea, { target: { value: "draft kept across reload" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "最新の状態を再読込" })).toBeInTheDocument());
+    expect(textarea).toHaveValue("draft kept across reload");
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "最新の状態を再読込" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存" })).not.toBeDisabled());
+    expect(screen.getByRole("textbox", { name: "メモ本文" })).toHaveValue("draft kept across reload");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("keeps outside clicks inert, traps Tab, and returns focus on Cancel or Escape", async () => {
+    renderPreview("typical");
+    await ready();
+    const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
+    await userEvent.click(origin);
+    const dialog = screen.getByRole("dialog");
+    const textarea = screen.getByRole("textbox", { name: "メモ本文" });
+    await waitFor(() => expect(document.activeElement).toBe(textarea));
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "保存" }));
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(textarea);
+    const modal = document.querySelector("[data-memo-modal]") as HTMLElement;
+    fireEvent.pointerDown(modal);
+    fireEvent.click(modal);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(document.activeElement).toBe(origin));
+
+    await userEvent.click(origin);
+    await userEvent.click(screen.getByRole("button", { name: "キャンセル" }));
+    await waitFor(() => expect(document.activeElement).toBe(origin));
   });
 });

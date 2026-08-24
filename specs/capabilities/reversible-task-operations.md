@@ -1,6 +1,6 @@
 # Capability: reversible-task-operations
 
-- Status: implemented / locked
+- Status: superseded by `reversible-task-operations` 1.1
 - Version: 1.0
 - User outcome: Remove mistakenly created work without leaving it in task history, and reliably undo recent task mutations in reverse order, including after restarting the desktop app.
 - Owner: Gantt chart app
@@ -178,3 +178,4 @@ The existing successful `createTaskInHierarchy`, `renameTask`, `moveTaskInHierar
 
 - 1.0 / 2026-08-23: Implemented and locked after the headless SQLite, Tauri adapter, restart, bounded retention, atomic rollback, and monotonic revision/version contract tests passed.
 - 1.0 / 2026-08-23: Drafted from the explicitly requested delete-without-history and multi-operation undo capability; additive to the locked hierarchy, lifecycle, queue, session-history, and projection capabilities.
+- 1.0 / 2026-08-24: Superseded by 1.1 after approved CCR-003 added atomic memo-update undo without weakening existing behavior.

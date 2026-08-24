@@ -22,6 +22,7 @@ pub fn run() {
             commands::database_health,
             commands::create_task,
             commands::rename_task,
+            commands::update_task_memo,
             commands::start_task,
             commands::switch_focus,
             commands::pause_task,

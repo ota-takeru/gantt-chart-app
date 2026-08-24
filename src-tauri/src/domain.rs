@@ -117,6 +117,8 @@ pub struct TaskSnapshot {
     pub state: TaskState,
     pub version: i64,
     pub created_at: String,
+    #[serde(default)]
+    pub memo: String,
     /// The most recent completion event, retained after a task is reopened.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,

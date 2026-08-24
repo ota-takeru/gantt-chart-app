@@ -83,7 +83,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 button:disabled { cursor: not-allowed; opacity: .52; }
 
 .app-shell { min-height: 100vh; }
-.work-surface { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 16px 0 64px; }
+.work-surface { width: calc(100% - 32px); max-width: none; margin: 0 auto; padding: 16px 0 64px; }
 
 .preview-strip { margin: 0 0 10px; padding: 6px 10px; border: 1px solid var(--warning-border); background: var(--warning-surface); color: var(--warning); font-size: 12px; }
 
@@ -127,11 +127,9 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .task-row.is-dragging { opacity: .5; }
 .task-row.is-selected { background: var(--selected); }
 .task-identity { display: flex; align-items: center; min-width: 0; }
-.branch-rail { align-self: stretch; width: 2px; margin-left: calc(var(--depth, 0) * 22px + 10px); background: var(--soft); }
-.depth-1 .branch-rail { margin-left: 32px; }
-.depth-2 .branch-rail { margin-left: 54px; }
-.depth-3 .branch-rail { margin-left: 76px; }
-.depth-4 .branch-rail { margin-left: 98px; }
+.branch-rail { align-self: stretch; width: 2px; margin-left: var(--depth-offset, 8px); background: var(--soft); }
+.depth-cue { padding: 1px 4px; border: 1px solid var(--line); color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.hierarchy-path { flex: 1 0 100%; min-width: 0; overflow-wrap: anywhere; border-left: 2px solid var(--accent); padding: 2px 6px; color: var(--muted); font-size: 10px; line-height: 1.35; }
 .drag-handle { flex: 0 0 32px; min-height: 32px; border: 0; background: transparent; color: var(--drag-handle); font-size: 17px; letter-spacing: -4px; cursor: grab; touch-action: none; user-select: none; }
 .drag-handle:active { cursor: grabbing; }
 .disclosure, .disclosure-spacer { flex: 0 0 32px; width: 32px; min-height: 32px; border: 0; background: transparent; color: var(--accent); text-align: center; cursor: pointer; }
@@ -220,7 +218,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; white-space: nowrap !important; clip-path: inset(50%) !important; }
 
 @media (max-width: 760px) {
-  .work-surface { width: min(100% - 20px, 1120px); padding-top: 10px; }
+  .work-surface { width: calc(100% - 20px); padding-top: 10px; }
   .compact-topline { flex-wrap: wrap; }
   .now-label { min-width: 150px; }
   .top-create { order: 3; flex-basis: 100%; max-width: none; }
@@ -239,7 +237,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 
 /* History-left / NOW-right surface */
 .history-surface { position: relative; padding: 12px 0 28px; }
-.history-composite { --history-left: calc(46% - 18px); --history-right: calc(54% - 18px); position: relative; outline: none; }
+.history-composite { --history-left: calc(58% - 18px); --history-right: calc(42% - 18px); position: relative; outline: none; }
 .history-composite:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
 .history-ruler-grid, .history-row, .history-detail-row, .history-empty-row { display: grid; grid-template-columns: var(--history-left) 36px var(--history-right); }
 .history-ruler-grid { min-height: 48px; border-bottom: 1px solid var(--ink); }
@@ -272,6 +270,11 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .history-detail .history-detail-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-detail-summary { display: grid; flex: 1 1 220px; gap: 1px; min-width: 0; }
 .history-detail-summary strong, .history-detail-summary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.actual-history-status { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 4px; min-width: 0; overflow: visible; color: var(--muted); white-space: normal; }
+.actual-history-status strong { color: var(--ink); font-size: 11px; }
+.actual-history-status[role="status"] { color: var(--muted); }
+.actual-history-error { color: var(--danger); white-space: normal; }
+.actual-history-retry { border: 1px solid currentColor; background: var(--paper); padding: 2px 6px; color: inherit; font-size: 10px; cursor: pointer; }
 .history-detail-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; margin-left: auto; }
 .history-help { margin: 4px 0 7px; color: var(--muted); font-size: 11px; }
 .history-empty-row { min-height: 72px; border-bottom: 1px solid var(--line); }
@@ -300,7 +303,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .history-row .drag-handle, .history-row .disclosure, .history-row .completion-box { flex: 0 0 32px; }
 
 @media (max-width: 760px) {
-  .history-composite { --history-left: calc(44% - 14px); --history-right: calc(56% - 14px); }
+  .history-composite { --history-left: calc(52% - 14px); --history-right: calc(48% - 14px); }
   .history-ruler-grid, .history-row, .history-detail-row, .history-empty-row { grid-template-columns: var(--history-left) 28px var(--history-right); }
   .identity-heading small { display: none; }
   .history-detail .history-detail-path { flex-basis: 100%; }
@@ -342,7 +345,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 
 /* Reversible operations: one durable latest-operation receipt aligned with
    the same history / NOW / identity columns as the task surface. */
-.undo-receipt { --history-left: calc(46% - 18px); --history-right: calc(54% - 18px); display: grid; grid-template-columns: var(--history-left) 36px var(--history-right); height: 40px; margin: 6px 0 8px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--soft); font-size: 11px; }
+.undo-receipt { --history-left: calc(58% - 18px); --history-right: calc(42% - 18px); display: grid; grid-template-columns: var(--history-left) 36px var(--history-right); height: 40px; margin: 6px 0 8px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--soft); font-size: 11px; }
 .undo-receipt:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .undo-receipt-left { display: flex; align-items: center; min-width: 0; padding: 5px 8px; color: var(--muted); }
 .undo-receipt-kicker { letter-spacing: .06em; }
@@ -379,7 +382,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .root-landing-sill.is-invalid { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
 
 @media (max-width: 760px) {
-  .undo-receipt { --history-left: calc(44% - 14px); --history-right: calc(56% - 14px); grid-template-columns: var(--history-left) 28px var(--history-right); }
+  .undo-receipt { --history-left: calc(52% - 14px); --history-right: calc(48% - 14px); grid-template-columns: var(--history-left) 28px var(--history-right); }
   .delete-confirm { margin-left: 50px; }
   .root-landing-sill { right: 8px; bottom: 6px; left: 8px; }
 }
@@ -717,4 +720,64 @@ button:disabled { cursor: not-allowed; opacity: .52; }
     transition: none !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Memo editing stays attached to the current-side identity without adding a
+   row-height-changing editor to the timeline.  The presence glyph is a
+   shape/text cue, so memo state is never communicated by color alone. */
+.memo-presence { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; border: 1px solid var(--line); background: var(--paper); padding: 1px 3px; color: var(--muted); font-size: 10px; line-height: 1.1; }
+.memo-presence.has-memo { border-style: double; border-color: var(--accent); color: var(--ink); font-weight: 800; }
+.memo-presence.is-empty { border-style: dashed; }
+.memo-action { border-style: dashed; }
+.memo-action:hover:not(:disabled), .memo-action:focus-visible { border-color: var(--accent); color: var(--accent); }
+.current-identity { padding-right: 180px; }
+.row-actions { width: 180px; gap: 3px; }
+.history-row.is-editing .current-identity { padding-right: 8px; }
+.history-detail-actions { flex-wrap: wrap; }
+
+/* Direction B: a single docked dialog originates on the NOW/current side.
+   The backdrop is an interaction boundary; it intentionally has no close
+   handler so an accidental outside click cannot discard a draft. */
+body.memo-modal-open { overflow: hidden; }
+.memo-modal-backdrop { position: fixed; z-index: 100; inset: 0; display: flex; align-items: flex-start; justify-content: flex-end; padding: clamp(54px, 10vh, 104px) clamp(16px, 4vw, 64px) 24px; background: rgba(31, 42, 45, .34); }
+.memo-dock { display: flex; flex-direction: column; width: min(520px, calc(100vw - 32px)); max-height: min(680px, calc(100vh - 40px)); overflow: hidden; border: 1px solid var(--ink); background: var(--paper); color: var(--ink); box-shadow: 0 10px 30px var(--surface-shadow); animation: motion-panel-enter var(--duration-standard) var(--ease-enter) both; }
+.memo-dock:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.memo-dock-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); background: var(--soft); padding: 10px 12px 8px; }
+.memo-origin-cue { display: flex; align-items: center; gap: 4px; border: 1px solid var(--accent); background: var(--accent-soft); padding: 4px 6px; color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+.memo-origin-arrow { font-size: 15px; line-height: .8; }
+.memo-dock-heading { min-width: 0; }
+.memo-dock-kicker { display: block; color: var(--muted); font-size: 10px; letter-spacing: .08em; }
+.memo-dock h2 { margin: 2px 0 0; overflow: hidden; color: var(--ink); font-size: 15px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.memo-origin-label { max-width: 132px; overflow: hidden; color: var(--muted); font-size: 10px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.memo-dialog-description { margin: 8px 12px 4px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.memo-textarea-label { margin: 6px 12px 3px; color: var(--ink); font-size: 11px; font-weight: 700; }
+.memo-textarea { width: calc(100% - 24px); min-height: 190px; max-height: min(50vh, 420px); margin: 0 12px; resize: vertical; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line); background: var(--surface); padding: 9px 10px; color: var(--ink); font: inherit; font-size: 13px; line-height: 1.55; }
+.memo-textarea:focus-visible { border-color: var(--accent); outline: 3px solid var(--focus); outline-offset: 1px; }
+.memo-scalar-count { margin: 4px 12px 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.memo-scalar-count.is-invalid { color: var(--danger); font-weight: 700; }
+.memo-dialog-status { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 8px; margin: 7px 12px 0; border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 6px 8px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.memo-dialog-status.is-error { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+.memo-dialog-status.is-pending { border-color: var(--accent); }
+.memo-recovery-action { margin-left: auto; border: 1px solid currentColor; background: var(--paper); padding: 3px 6px; color: inherit; font-size: 10px; cursor: pointer; }
+.memo-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: auto; border-top: 1px solid var(--line); padding: 10px 12px; }
+.memo-save-action { min-height: 32px; border: 1px solid var(--accent); background: var(--accent); padding: 5px 12px; color: var(--on-accent); font-size: 12px; font-weight: 700; cursor: pointer; }
+.memo-save-action:hover:not(:disabled) { background: var(--ink); border-color: var(--ink); }
+.memo-dialog-actions .quiet-action { min-height: 32px; }
+
+@media (max-width: 760px), (max-height: 560px) {
+  .current-identity { padding-right: 154px; }
+  .row-actions { width: 154px; }
+  .memo-modal-backdrop { align-items: center; justify-content: center; padding: 12px; }
+  .memo-dock { width: min(100%, 520px); max-height: calc(100vh - 24px); }
+  .memo-dock-header { grid-template-columns: auto minmax(0, 1fr); }
+  .memo-origin-label { grid-column: 2; grid-row: 2; max-width: none; text-align: left; }
+  .memo-textarea { min-height: 150px; max-height: 42vh; }
+}
+
+@media (forced-colors: active) {
+  .memo-modal-backdrop { background: Canvas; }
+  .memo-dock, .memo-textarea, .memo-origin-cue, .memo-save-action, .memo-recovery-action { border-color: ButtonText; background: Canvas; color: CanvasText; }
+  .memo-save-action { background: ButtonText; color: ButtonFace; }
+  .memo-dialog-status.is-error { border-color: ButtonText; background: Canvas; color: CanvasText; }
+  .memo-presence.has-memo { border-color: ButtonText; color: ButtonText; }
 }

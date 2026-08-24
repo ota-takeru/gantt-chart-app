@@ -45,6 +45,15 @@ export class TauriTaskApi implements TaskApi {
     });
   }
 
+  updateTaskMemo(taskId: string, memo: string, expectedTaskVersion: number, instant?: string) {
+    return invoke<ReversibleChangeResult>("update_task_memo", {
+      taskId,
+      memo,
+      expectedTaskVersion,
+      effectiveInstant: effectiveInstant(instant),
+    });
+  }
+
   startTask(taskId: string, expectedVersion: number, instant?: string) {
     return invoke<LifecycleResult>("start_task", {
       taskId,

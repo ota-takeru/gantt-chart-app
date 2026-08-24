@@ -1,8 +1,9 @@
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
 import { createFixtureTaskApi, previewVariantFromLocation, type PreviewVariant } from "./api/fixtureTaskApi";
 import { isTauriRuntime, TauriTaskApi } from "./api/tauriTaskApi";
 import {
   type DomainError,
+  type ActualHistorySummary,
   type HierarchyEntry,
   type ReversibleChangeResult,
   type TaskApi,
@@ -21,6 +22,10 @@ type KeyboardMove = { taskId: string; destinations: Placement[]; index: number; 
 type DeleteConfirmation = { taskId: string; originFocusId: string; successFocusId: string };
 type RangePreset = "24h" | "7d" | "30d" | "90d" | "all";
 type RangeView = { preset: RangePreset; startMs: number; endMs: number; anchoredNow: boolean };
+type ActualHistoryLoadState =
+  | { status: "loading" }
+  | { status: "ready"; summary: ActualHistorySummary }
+  | { status: "error"; error: DomainError };
 
 const FOREST_LIMIT = 5000;
 const PREVIEW_NOW = "2026-08-23T06:12:00.000Z";
@@ -39,6 +44,24 @@ const RANGE_DURATIONS: Record<Exclude<RangePreset, "all">, number> = {
 };
 
 const RANGE_PRESETS: readonly RangePreset[] = ["24h", "7d", "30d", "90d", "all"];
+const MEMO_SCALAR_LIMIT = 4000;
+
+type MemoEditorState = {
+  taskId: string;
+  title: string;
+  originFocusId: string;
+  originLabel: string;
+  baseVersion: number;
+  initialMemo: string;
+  draft: string;
+  error: DomainError | null;
+  reloadRequired: boolean;
+  missing: boolean;
+};
+
+function memoScalarLength(value: string): number {
+  return Array.from(value).length;
+}
 
 function formatExact(instant: string | number): string {
   const date = new Date(instant);
@@ -54,6 +77,13 @@ function formatExact(instant: string | number): string {
 
 function formatBounds(instant: number): string {
   return formatExact(instant);
+}
+
+function formatActualDuration(durationMs: number): string {
+  const totalMinutes = Math.max(0, Math.floor(durationMs / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours}時間${minutes > 0 ? `${minutes}分` : ""}` : `${minutes}分`;
 }
 
 function timelineDescription(entry: HierarchyEntry, nowMs: number): string {
@@ -267,33 +297,32 @@ type HistoryPocketProps = {
 };
 
 function HistoryPocket({ root, members, range, nowMs, expanded, selectedTaskId, onSelect, onToggle }: HistoryPocketProps): ReactElement {
-  const initialMemberLimit = members.length <= 5 ? members.length : 3;
-  const visibleMembers = expanded ? members : members.slice(0, initialMemberLimit);
-  const hiddenCount = Math.max(0, members.length - visibleMembers.length);
   const rootLabel = `${root.task.title}の完了履歴 ${members.length}件`;
+  const lanesId = `history-pocket-lanes-${root.task.id}`;
   return <div className={`history-pocket ${expanded ? "is-expanded" : ""} ${members.some((entry) => entry.task.id === selectedTaskId) ? "is-selected" : ""}`} data-pocket-id={root.task.id}>
-    <button type="button" className="pocket-caption" tabIndex={-1} onMouseDown={(event) => event.preventDefault()} onClick={() => onToggle(root.task.id)} aria-label={`${rootLabel}${expanded ? "を折りたたむ" : "を展開"}`}>
+    <button id={`history-pocket-caption-${root.task.id}`} data-focus-id={`history-pocket-caption:${root.task.id}`} type="button" className="pocket-caption" tabIndex={-1} onMouseDown={(event) => event.preventDefault()} onClick={() => onToggle(root.task.id)} aria-label={`${rootLabel}${expanded ? "を折りたたむ" : "を展開"}`} aria-expanded={expanded} aria-controls={expanded ? lanesId : undefined}>
       <span className="pocket-caption-chevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
       <span className="pocket-caption-title">{root.task.title}</span>
       <span className="pocket-caption-count">{members.length}件</span>
     </button>
-    <div className="pocket-lanes" aria-label={rootLabel}>
-      {visibleMembers.map((entry) => {
-        const geometry = lifetimeGeometry(entry, range.startMs, range.endMs, nowMs);
-        const position = geometry.kind === "before" ? 0 : geometry.kind === "after" ? 98 : geometry.left ?? 0;
-        const width = geometry.kind === "interval" ? geometry.width ?? 0 : 0;
-        const relativeDepth = Math.max(0, entry.depth - root.depth);
-        const titleLeft = geometry.kind === "interval" ? Math.min(66, position + width + 2) : 4;
-        const markerLabel = `${entry.task.title}。${timelineDescription(entry, nowMs)}`;
-        return <div key={entry.task.id} className={`pocket-member-row ${selectedTaskId === entry.task.id ? "is-selected" : ""}`} data-history-member-id={entry.task.id}>
-          <div className="pocket-member-track" role="group" aria-label={markerLabel}>
-            <button id={`history-mark-${entry.task.id}`} type="button" className={`pocket-mark ${selectedTaskId === entry.task.id ? "is-selected" : ""} ${geometry.kind !== "interval" ? `is-${geometry.kind}` : ""} ${geometry.kind === "point" ? "is-closed" : ""} ${geometry.missingEnd ? "is-warning" : ""}`} data-history-mark={entry.task.id} data-timeline-cell={entry.task.id} data-start-ms={Date.parse(entry.task.createdAt)} data-end-ms={entry.task.completedAt ? Date.parse(entry.task.completedAt) : "missing"} aria-label={markerLabel} tabIndex={-1} style={{ left: `${position}%`, ...(geometry.kind === "interval" ? { width: `${width}%` } : {}) }} onMouseDown={(event) => event.preventDefault()} onClick={() => onSelect(entry.task.id)}>{geometry.kind === "before" ? "◁" : geometry.kind === "after" ? "▷" : geometry.missingEnd ? "△" : geometry.kind === "point" ? "■" : "■"}</button>
-            <button type="button" className="pocket-member-title" aria-label={`${entry.task.title}を選択`} tabIndex={-1} style={{ left: `${titleLeft}%`, paddingLeft: `${Math.min(relativeDepth, 4) * 14}px` }} onMouseDown={(event) => event.preventDefault()} onClick={() => onSelect(entry.task.id)}><span className="pocket-member-branch" aria-hidden="true">{relativeDepth > 0 ? "└" : "•"}</span>{entry.task.title}</button>
-          </div>
-        </div>;
-      })}
-      {hiddenCount > 0 && <button type="button" className="pocket-more" aria-label={`${rootLabel}を展開`} tabIndex={-1} onMouseDown={(event) => event.preventDefault()} onClick={() => onToggle(root.task.id)}>＋{hiddenCount}件</button>}
-    </div>
+    {expanded && (
+      <div id={lanesId} className="pocket-lanes" aria-label={rootLabel}>
+        {members.map((entry) => {
+          const geometry = lifetimeGeometry(entry, range.startMs, range.endMs, nowMs);
+          const position = geometry.kind === "before" ? 0 : geometry.kind === "after" ? 98 : geometry.left ?? 0;
+          const width = geometry.kind === "interval" ? geometry.width ?? 0 : 0;
+          const relativeDepth = Math.max(0, entry.depth - root.depth);
+          const titleLeft = geometry.kind === "interval" ? Math.min(66, position + width + 2) : 4;
+          const markerLabel = `${entry.task.title}。${timelineDescription(entry, nowMs)}`;
+          return <div key={entry.task.id} className={`pocket-member-row ${selectedTaskId === entry.task.id ? "is-selected" : ""}`} data-history-member-id={entry.task.id} data-depth={entry.depth}>
+            <div className="pocket-member-track" role="group" aria-label={markerLabel}>
+              <button id={`history-mark-${entry.task.id}`} type="button" className={`pocket-mark ${selectedTaskId === entry.task.id ? "is-selected" : ""} ${geometry.kind !== "interval" ? `is-${geometry.kind}` : ""} ${geometry.kind === "point" ? "is-closed" : ""} ${geometry.missingEnd ? "is-warning" : ""}`} data-history-mark={entry.task.id} data-timeline-cell={entry.task.id} data-start-ms={Date.parse(entry.task.createdAt)} data-end-ms={entry.task.completedAt ? Date.parse(entry.task.completedAt) : "missing"} aria-label={markerLabel} tabIndex={-1} style={{ left: `${position}%`, ...(geometry.kind === "interval" ? { width: `${width}%` } : {}) }} onMouseDown={(event) => event.preventDefault()} onClick={() => onSelect(entry.task.id)}>{geometry.kind === "before" ? "◁" : geometry.kind === "after" ? "▷" : geometry.missingEnd ? "△" : geometry.kind === "point" ? "■" : "■"}</button>
+              <button type="button" className="pocket-member-title" aria-label={`${entry.task.title}を選択`} tabIndex={-1} style={{ left: `${titleLeft}%`, paddingLeft: `${Math.min(relativeDepth, 8) * 10}px` }} onMouseDown={(event) => event.preventDefault()} onClick={() => onSelect(entry.task.id)}><span className="pocket-member-branch" aria-hidden="true">{relativeDepth > 0 ? "└" : "•"}</span>{entry.task.title}</button>
+            </div>
+          </div>;
+        })}
+      </div>
+    )}
   </div>;
 }
 
@@ -317,6 +346,8 @@ function errorText(error: DomainError): string {
     "hierarchy-cycle": "自分自身や子孫の中には移動できません。",
     "hierarchy-depth-exceeded": "階層は8段までです。もう少し浅い場所を選んでください。",
     "invalid-title": "タイトルは1〜240文字で入力してください。",
+    "invalid-memo": "メモは4,000 Unicodeスカラー以内で入力してください。",
+    "invalid-effective-instant": "保存時刻が対象タスクの履歴境界より前です。",
     "tree-limit-exceeded": "タスクが多すぎるため、一覧を絞ってから操作してください。",
     "persistence-failure": "保存／読込に失敗しました。以前の状態は保持されています。",
     "undo-not-available": "元に戻せる操作はありません。現在の状態はそのままです。",
@@ -415,6 +446,101 @@ function useFocusRestoration(focusId: string | null) {
   }, [focusId]);
 }
 
+type MemoDialogProps = {
+  editor: MemoEditorState;
+  pending: boolean;
+  onDraftChange: (draft: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  onReload: () => void;
+  onRetry: () => void;
+};
+
+function MemoDialog({ editor, pending, onDraftChange, onSave, onCancel, onReload, onRetry }: MemoDialogProps): ReactElement {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scalarCount = memoScalarLength(editor.draft);
+  const overLimit = scalarCount > MEMO_SCALAR_LIMIT;
+  const staleOrMissing = editor.reloadRequired || editor.missing;
+  const canRetryPersistence = editor.error?.code === "persistence-failure";
+
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, [editor.taskId]);
+
+  const trapFocus = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      if (!pending) {
+        event.preventDefault();
+        onCancel();
+      }
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), textarea:not([disabled])") ?? []);
+    if (focusable.length === 0) {
+      event.preventDefault();
+      dialogRef.current?.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || active === dialogRef.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }, [onCancel, pending]);
+
+  const handleBackdropPointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    // The selected direction deliberately treats the outside surface as an
+    // inert boundary. It never silently saves or discards the draft.
+    if (event.target === event.currentTarget) event.preventDefault();
+  }, []);
+
+  return <div className="memo-modal-backdrop" data-memo-modal="true" onPointerDown={handleBackdropPointerDown} onClick={handleBackdropPointerDown}>
+    <div ref={dialogRef} className="memo-dock" role="dialog" aria-modal="true" aria-labelledby="memo-dialog-title" aria-describedby="memo-dialog-description" tabIndex={-1} onKeyDown={trapFocus}>
+      <div className="memo-dock-header">
+        <div className="memo-origin-cue" aria-hidden="true"><span>NOW</span><span className="memo-origin-arrow">→</span></div>
+        <div className="memo-dock-heading">
+          <span className="memo-dock-kicker">現在側のメモ</span>
+          <h2 id="memo-dialog-title">{editor.title}のメモ</h2>
+        </div>
+        <span className="memo-origin-label">{editor.originLabel}</span>
+      </div>
+      <p id="memo-dialog-description" className="memo-dialog-description">{editor.originLabel}から開いています。内容は保存するまで変更されません。</p>
+      <label className="memo-textarea-label" htmlFor="memo-dialog-textarea">メモ本文</label>
+      <textarea
+        ref={textareaRef}
+        id="memo-dialog-textarea"
+        className="memo-textarea"
+        value={editor.draft}
+        onChange={(event) => onDraftChange(event.currentTarget.value)}
+        disabled={pending}
+        autoComplete="off"
+        spellCheck="false"
+      />
+      <div className={`memo-scalar-count ${overLimit ? "is-invalid" : ""}`} data-memo-scalar-count={scalarCount} data-memo-scalar-limit={MEMO_SCALAR_LIMIT} role="status" aria-live="polite">
+        文字数 {scalarCount} / {MEMO_SCALAR_LIMIT}（残り {Math.max(0, MEMO_SCALAR_LIMIT - scalarCount)}）
+      </div>
+      {overLimit && <p className="memo-dialog-status is-error" role="alert"><span aria-hidden="true">!</span>メモは4,000 Unicodeスカラー以内で入力してください。</p>}
+      {!overLimit && editor.error && <div id="memo-dialog-status" className="memo-dialog-status is-error" role="alert">
+        <span>{errorText(editor.error)}</span>
+        {staleOrMissing && <button type="button" className="memo-recovery-action" onClick={onReload} disabled={pending}>最新の状態を再読込</button>}
+        {canRetryPersistence && <button type="button" className="memo-recovery-action" onClick={onRetry} disabled={pending}>再試行</button>}
+      </div>}
+      {pending && <p className="memo-dialog-status is-pending" role="status">保存中…</p>}
+      <div className="memo-dialog-actions">
+        <button type="button" className="quiet-action" onClick={onCancel} disabled={pending}>キャンセル</button>
+        <button type="button" className="memo-save-action" onClick={onSave} disabled={pending || overLimit || staleOrMissing}>{pending ? "保存中…" : "保存"}</button>
+      </div>
+    </div>
+  </div>;
+}
+
 export default function App({ api: injectedApi }: AppProps) {
   const previewVariant: PreviewVariant | undefined = previewVariantFromLocation();
   const previewMode = Boolean(previewVariant);
@@ -443,6 +569,9 @@ export default function App({ api: injectedApi }: AppProps) {
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [keyboardMove, setKeyboardMove] = useState<KeyboardMove | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmation | null>(null);
+  const [memoEditor, setMemoEditor] = useState<MemoEditorState | null>(null);
+  const memoEditorRef = useRef<MemoEditorState | null>(null);
+  const memoReturnFocusRef = useRef<string | null>(null);
   const [focusReturnId, setFocusReturnId] = useState<string | null>(null);
   const liveStatusRef = useRef<HTMLParagraphElement>(null);
   const keyboardPlacementRef = useRef<HTMLDivElement>(null);
@@ -455,10 +584,28 @@ export default function App({ api: injectedApi }: AppProps) {
   const [displayNowMs, setDisplayNowMs] = useState(initialNowMs);
   const [rangeView, setRangeView] = useState<RangeView>(() => ({ preset: "24h", startMs: initialNowMs - RANGE_DURATIONS["24h"], endMs: initialNowMs, anchoredNow: true }));
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [actualHistoryByTask, setActualHistoryByTask] = useState<Record<string, ActualHistoryLoadState>>({});
+  const [forestLoadToken, setForestLoadToken] = useState(0);
+  const actualHistoryCacheRef = useRef(new Map<string, ActualHistorySummary>());
+  const actualHistoryRequestRef = useRef(new Map<string, number>());
+  const actualHistoryEpochRef = useRef(0);
 
   useFocusRestoration(focusReturnId);
 
   useEffect(() => { editingTaskIdRef.current = editingTaskId; }, [editingTaskId]);
+  useEffect(() => { memoEditorRef.current = memoEditor; }, [memoEditor]);
+  useEffect(() => {
+    if (!memoEditor) return;
+    document.body.classList.add("memo-modal-open");
+    return () => document.body.classList.remove("memo-modal-open");
+  }, [memoEditor]);
+  useEffect(() => {
+    if (memoEditor) return;
+    const returnFocusId = memoReturnFocusRef.current;
+    if (!returnFocusId) return;
+    memoReturnFocusRef.current = null;
+    document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(returnFocusId)}"]`)?.focus();
+  }, [memoEditor]);
   useEffect(() => {
     if (keyboardMove) keyboardPlacementRef.current?.focus();
   }, [keyboardMove]);
@@ -490,6 +637,20 @@ export default function App({ api: injectedApi }: AppProps) {
   const selectedEntry = selectedTaskId ? byId.get(selectedTaskId) : undefined;
   const completedOnlyIds = useMemo(() => new Set(completedEntries.filter((entry) => !containsRemainingDescendant(entries, entry.task.id)).map((entry) => entry.task.id)), [completedEntries, entries]);
   const completedPocketRoots = useMemo(() => completedEntries.filter((entry) => completedOnlyIds.has(entry.task.id) && (!entry.parentTaskId || !completedOnlyIds.has(entry.parentTaskId))), [completedEntries, completedOnlyIds]);
+  const selectedCompletedPocket = useMemo(() => {
+    if (!selectedEntry || isRemaining(selectedEntry)) return undefined;
+    return completedPocketRoots.find((candidate) => candidate.task.id === selectedEntry.task.id || descendantsOf(entries, candidate.task.id).some((entry) => entry.task.id === selectedEntry.task.id));
+  }, [completedPocketRoots, entries, selectedEntry]);
+  const activeHistoryDescendantId = selectedTaskId
+    ? selectedEntry && isRemaining(selectedEntry)
+      ? `history-task-${selectedTaskId}`
+      : selectedCompletedPocket
+        ? expandedPockets.has(selectedCompletedPocket.task.id) ? `history-mark-${selectedTaskId}` : `history-pocket-caption-${selectedCompletedPocket.task.id}`
+        : undefined
+    : undefined;
+  const selectedCompletedDetailId = selectedEntry && !isRemaining(selectedEntry) && selectedCompletedPocket && expandedPockets.has(selectedCompletedPocket.task.id)
+    ? selectedEntry.task.id
+    : null;
 
   useEffect(() => {
     setRangeView((current) => {
@@ -517,11 +678,9 @@ export default function App({ api: injectedApi }: AppProps) {
       });
       const pocket = completedPocketRoots.find((candidate) => candidate.task.id === taskId || descendantsOf(entries, candidate.task.id).some((entry) => entry.task.id === taskId));
       if (!pocket || expandedPockets.has(pocket.task.id) || pocket.task.id === taskId) return;
-      const visibleIds = [pocket, ...descendantsOf(entries, pocket.task.id).filter((entry) => completedOnlyIds.has(entry.task.id))].slice(0, 3).map((entry) => entry.task.id);
-      if (visibleIds.includes(taskId)) return;
       setExpandedPockets((current) => new Set(current).add(pocket.task.id));
     });
-  }, [byId, completedOnlyIds, completedPocketRoots, entries, expandedPockets]);
+  }, [byId, completedPocketRoots, entries, expandedPockets]);
   const historyItemIds = useMemo(() => projectedForestOrder(entries), [entries]);
   const handleHistoryKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     if (historyItemIds.length === 0) return;
@@ -616,12 +775,12 @@ export default function App({ api: injectedApi }: AppProps) {
   const jumpHistory = useCallback(() => {
     const selectedCompleted = selectedEntry && !isRemaining(selectedEntry) ? selectedEntry.task.id : null;
     const target = selectedCompleted
-      ? document.getElementById(`history-mark-${selectedCompleted}`)
+      ? document.getElementById(`history-mark-${selectedCompleted}`) ?? (selectedCompletedPocket ? document.getElementById(`history-pocket-caption-${selectedCompletedPocket.task.id}`) : null)
       : completedPocketRoots[0]
         ? document.querySelector<HTMLElement>(`[data-pocket-id="${CSS.escape(completedPocketRoots[0].task.id)}"]`)
         : null;
     target?.scrollIntoView?.({ block: "start", inline: "nearest" });
-  }, [completedPocketRoots, selectedEntry]);
+  }, [completedPocketRoots, selectedCompletedPocket, selectedEntry]);
 
   const fitSelected = useCallback((taskId: string) => {
     const entry = byId.get(taskId);
@@ -640,7 +799,15 @@ export default function App({ api: injectedApi }: AppProps) {
     setRangeView({ preset: rangeView.preset, startMs, endMs, anchoredNow: false });
   }, [byId, displayNowMs, rangeView.preset]);
 
+  const invalidateActualHistory = useCallback(() => {
+    actualHistoryEpochRef.current += 1;
+    actualHistoryCacheRef.current.clear();
+    actualHistoryRequestRef.current.clear();
+    setActualHistoryByTask({});
+  }, []);
+
   const loadForest = useCallback(async (restoreFocusId?: string) => {
+    invalidateActualHistory();
     const hasCommittedForest = forestRef.current !== null;
     startTransition(() => { if (hasCommittedForest) setRefreshing(true); else setLoading(true); });
     setLoadError(null);
@@ -651,6 +818,7 @@ export default function App({ api: injectedApi }: AppProps) {
         setForest(snapshot);
         setFocusReturnId(restoreFocusId ?? null);
       });
+      setForestLoadToken((current) => current + 1);
     } catch (reason) {
       setLoadError(normalizeDomainError(reason));
     } finally {
@@ -659,7 +827,7 @@ export default function App({ api: injectedApi }: AppProps) {
         setRefreshing(false);
       });
     }
-  }, [api]);
+  }, [api, invalidateActualHistory]);
 
   const loadUndoStatus = useCallback(async () => {
     setUndoLoading(true);
@@ -683,10 +851,170 @@ export default function App({ api: injectedApi }: AppProps) {
 
   useEffect(() => { void loadWorkspace(); }, [loadWorkspace]);
 
+  const loadActualHistory = useCallback((taskId: string, force = false) => {
+    const cached = actualHistoryCacheRef.current.get(taskId);
+    if (!force && cached) {
+      setActualHistoryByTask((current) => ({ ...current, [taskId]: { status: "ready", summary: cached } }));
+      return;
+    }
+    const epoch = actualHistoryEpochRef.current;
+    const requestId = (actualHistoryRequestRef.current.get(taskId) ?? 0) + 1;
+    actualHistoryRequestRef.current.set(taskId, requestId);
+    setActualHistoryByTask((current) => ({ ...current, [taskId]: { status: "loading" } }));
+    void api.getTaskActualHistory(taskId).then((summary) => {
+      if (actualHistoryEpochRef.current !== epoch || actualHistoryRequestRef.current.get(taskId) !== requestId) return;
+      const currentForest = forestRef.current;
+      if (currentForest && summary.sourceRevision !== currentForest.sourceRevision) {
+        setActualHistoryByTask((current) => ({ ...current, [taskId]: { status: "error", error: { code: "version-conflict", message: "一覧が更新されています。再読込してからもう一度お試しください。" } } }));
+        return;
+      }
+      actualHistoryCacheRef.current.set(taskId, summary);
+      setActualHistoryByTask((current) => ({ ...current, [taskId]: { status: "ready", summary } }));
+    }).catch((reason) => {
+      if (actualHistoryEpochRef.current !== epoch || actualHistoryRequestRef.current.get(taskId) !== requestId) return;
+      setActualHistoryByTask((current) => ({ ...current, [taskId]: { status: "error", error: normalizeDomainError(reason) } }));
+    });
+  }, [api]);
+
+  useEffect(() => {
+    if (!selectedCompletedDetailId || !forest) return;
+    loadActualHistory(selectedCompletedDetailId);
+  }, [forest, forestLoadToken, loadActualHistory, selectedCompletedDetailId]);
+
   const clearFeedback = useCallback(() => {
     setActionError(null);
     setNotice(null);
   }, []);
+
+  const openMemo = useCallback((entry: HierarchyEntry) => {
+    if (pendingRef.current) return;
+    clearFeedback();
+    const next: MemoEditorState = {
+      taskId: entry.task.id,
+      title: entry.task.title,
+      originFocusId: `memo:${entry.task.id}`,
+      originLabel: isRemaining(entry) ? "NOW / 現在側" : "履歴 / 現在側",
+      baseVersion: entry.task.version,
+      initialMemo: entry.task.memo,
+      draft: entry.task.memo,
+      error: null,
+      reloadRequired: false,
+      missing: false,
+    };
+    memoEditorRef.current = next;
+    setMemoEditor(next);
+    setFocusReturnId(null);
+  }, [clearFeedback]);
+
+  const closeMemo = useCallback(() => {
+    const current = memoEditorRef.current;
+    if (!current) return;
+    memoReturnFocusRef.current = current.originFocusId;
+    memoEditorRef.current = null;
+    setMemoEditor(null);
+    setFocusReturnId(current.originFocusId);
+  }, []);
+
+  const changeMemoDraft = useCallback((draft: string) => {
+    setMemoEditor((current) => {
+      if (!current) return current;
+      const next = { ...current, draft };
+      memoEditorRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const saveMemo = useCallback(async () => {
+    const current = memoEditorRef.current;
+    if (!current || pendingRef.current) return;
+    if (memoScalarLength(current.draft) > MEMO_SCALAR_LIMIT || current.reloadRequired || current.missing) return;
+    if (current.draft === current.initialMemo) {
+      closeMemo();
+      return;
+    }
+    const key = `memo:${current.taskId}`;
+    pendingRef.current = key;
+    setPending(key);
+    setActionError(null);
+    setMemoEditor((value) => {
+      if (!value) return value;
+      const next = { ...value, error: null };
+      memoEditorRef.current = next;
+      return next;
+    });
+    try {
+      await api.updateTaskMemo(current.taskId, current.draft, current.baseVersion, nowForApi(previewMode));
+      invalidateActualHistory();
+      await loadWorkspace();
+      setNotice("メモを更新しました");
+      closeMemo();
+    } catch (reason) {
+      const error = normalizeDomainError(reason);
+      const reloadRequired = error.code === "stale-version" || error.code === "version-conflict" || error.code === "task-not-found";
+      setMemoEditor((value) => {
+        if (!value || value.taskId !== current.taskId) return value;
+        const next = { ...value, error, reloadRequired, missing: error.code === "task-not-found" };
+        memoEditorRef.current = next;
+        return next;
+      });
+    } finally {
+      pendingRef.current = null;
+      setPending(null);
+    }
+  }, [api, closeMemo, invalidateActualHistory, loadWorkspace, previewMode]);
+
+  const reloadMemo = useCallback(async () => {
+    const current = memoEditorRef.current;
+    if (!current || pendingRef.current) return;
+    const key = `memo-reload:${current.taskId}`;
+    pendingRef.current = key;
+    setPending(key);
+    setMemoEditor((value) => {
+      if (!value) return value;
+      const next = { ...value, error: null };
+      memoEditorRef.current = next;
+      return next;
+    });
+    try {
+      await loadWorkspace();
+      const refreshed = forestRef.current?.entries.find((entry) => entry.task.id === current.taskId);
+      if (!refreshed) {
+        const error: DomainError = { code: "task-not-found", message: "対象が現在の一覧にありません。変更はありません" };
+        setMemoEditor((value) => {
+          if (!value || value.taskId !== current.taskId) return value;
+          const next = { ...value, error, reloadRequired: true, missing: true };
+          memoEditorRef.current = next;
+          return next;
+        });
+      } else {
+        setMemoEditor((value) => {
+          if (!value || value.taskId !== current.taskId) return value;
+          const next = {
+            ...value,
+            title: refreshed.task.title,
+            baseVersion: refreshed.task.version,
+            initialMemo: refreshed.task.memo,
+            error: null,
+            reloadRequired: false,
+            missing: false,
+          };
+          memoEditorRef.current = next;
+          return next;
+        });
+      }
+    } catch (reason) {
+      const error = normalizeDomainError(reason);
+      setMemoEditor((value) => {
+        if (!value || value.taskId !== current.taskId) return value;
+        const next = { ...value, error };
+        memoEditorRef.current = next;
+        return next;
+      });
+    } finally {
+      pendingRef.current = null;
+      setPending(null);
+    }
+  }, [loadWorkspace]);
 
   const applyMutation = useCallback(async <T,>(key: string, action: () => Promise<T>, success: string, restoreFocusId?: string, onSuccess?: () => void, onError?: (error: DomainError) => void): Promise<T | undefined> => {
     if (pendingRef.current) return undefined;
@@ -698,6 +1026,7 @@ export default function App({ api: injectedApi }: AppProps) {
     });
     try {
       const result = await action();
+      invalidateActualHistory();
       setNotice(success);
       onSuccess?.();
       await loadWorkspace(restoreFocusId);
@@ -712,7 +1041,7 @@ export default function App({ api: injectedApi }: AppProps) {
       pendingRef.current = null;
       startTransition(() => setPending(null));
     }
-  }, [loadWorkspace]);
+  }, [invalidateActualHistory, loadWorkspace]);
 
   const submitTopLevel = useCallback(async (title: string): Promise<boolean> => {
     const trimmedTitle = title.trim();
@@ -795,7 +1124,7 @@ export default function App({ api: injectedApi }: AppProps) {
       `complete:${entry.task.id}`,
       () => api.completeHierarchyTask(entry.task.id, entry.task.version, nowForApi(previewMode)),
       "完了にしました",
-      `reopen:${entry.task.id}`,
+      `history-pocket-caption:${entry.task.id}`,
       () => setSelectedTaskId(entry.task.id),
       (error) => {
         if (error.code !== "incomplete-descendants") return;
@@ -1063,13 +1392,23 @@ export default function App({ api: injectedApi }: AppProps) {
   }, []);
 
   const renderCompletedDetail = (entry: HierarchyEntry): ReactElement => {
+    const actualHistory = actualHistoryByTask[entry.task.id];
+    const actualWorkReadout = !actualHistory || actualHistory.status === "loading"
+      ? <span className="actual-history-status" data-actual-history-state="loading" role="status">実作業時間を読み込み中…</span>
+      : actualHistory.status === "error"
+        ? <span className="actual-history-status actual-history-error" data-actual-history-state="error" role="alert">実作業時間を読み込めませんでした。{errorText(actualHistory.error)} <button type="button" className="actual-history-retry" aria-label={`${entry.task.title}の実績履歴を再試行`} onClick={() => loadActualHistory(entry.task.id, true)}>再試行</button></span>
+        : actualHistory.summary.sessionCount === 0
+          ? <span className="actual-history-status" data-actual-history-state="no-record"><strong>実作業時間</strong> 記録なし（セッション記録なし）</span>
+          : <span className="actual-history-status" data-actual-history-state="ready" data-actual-duration-ms={actualHistory.summary.totalClosedDurationMs}><strong>実作業時間</strong> {formatActualDuration(actualHistory.summary.totalClosedDurationMs)}（記録済みセッション {actualHistory.summary.sessionCount}件）</span>;
     return <div className="history-detail-row history-detail-row-local" data-local-detail-for={entry.task.id}>
       <div className="history-detail" aria-label={`${pathLabel(entry, byId)}の完了履歴詳細`} data-selected-readout={entry.task.id}>
         <div className="history-detail-summary">
           <strong>{entry.task.title}</strong>
           <span>{entry.task.completedAt ? `作成 ${formatExact(entry.task.createdAt)} → 完了 ${formatExact(entry.task.completedAt)}` : `作成 ${formatExact(entry.task.createdAt)} → 完了時刻なし`}</span>
+          {actualWorkReadout}
         </div>
         <div className="history-detail-actions">
+          <button type="button" className="quiet-action memo-action" data-focus-id={`memo:${entry.task.id}`} aria-label={`${entry.task.title}のメモを編集`} onClick={() => openMemo(entry)} disabled={pending !== null}>メモ</button>
           <button type="button" className="quiet-action" aria-label={`${entry.task.title}をNOWへ戻す`} data-focus-id={`reopen:${entry.task.id}`} onClick={() => void reopen(entry)} disabled={pending !== null}>戻す</button>
           <button type="button" className="quiet-action delete-action" data-focus-id={`delete:${entry.task.id}`} onClick={() => beginDelete(entry)} disabled={pending !== null}>削除</button>
         </div>
@@ -1080,15 +1419,17 @@ export default function App({ api: injectedApi }: AppProps) {
 
   const renderPocket = (entry: HierarchyEntry): ReactElement => {
     const members = [entry, ...descendantsOf(entries, entry.task.id).filter((candidate) => completedOnlyIds.has(candidate.task.id))];
+    const expanded = expandedPockets.has(entry.task.id);
     const selectedCompleted = selectedEntry && !isRemaining(selectedEntry) && members.some((member) => member.task.id === selectedEntry.task.id) ? selectedEntry : null;
-    return <div key={`pocket:${entry.task.id}`} className={`tree-branch pocket-branch depth-${Math.min(entry.depth, 4)}`} data-task-id={entry.task.id} role="treeitem" aria-level={entry.depth + 1} aria-label={`${entry.task.title}の完了履歴 ${members.length}件`} aria-expanded={members.length > 3 ? expandedPockets.has(entry.task.id) : undefined} onFocusCapture={() => selectTask(entry.task.id)}>
+    const depthStyle = { "--depth": entry.depth, "--depth-offset": `${Math.min(entry.depth, 8) * 12 + 8}px` } as CSSProperties;
+    return <div key={`pocket:${entry.task.id}`} className={`tree-branch pocket-branch depth-${entry.depth}`} data-task-id={entry.task.id} data-depth={entry.depth} style={depthStyle} role="treeitem" aria-level={entry.depth + 1} aria-label={`${entry.task.title}の完了履歴 ${members.length}件`} aria-expanded={expanded} onFocusCapture={() => selectTask(entry.task.id)}>
       <div className="history-row pocket-row" data-row-id={`pocket:${entry.task.id}`}>
-        <HistoryPocket root={entry} members={members} range={rangeView} nowMs={displayNowMs} expanded={expandedPockets.has(entry.task.id)} selectedTaskId={selectedTaskId} onSelect={selectTask} onToggle={togglePocket} />
+        <HistoryPocket root={entry} members={members} range={rangeView} nowMs={displayNowMs} expanded={expanded} selectedTaskId={selectedTaskId} onSelect={selectTask} onToggle={togglePocket} />
         <div className="now-hinge-cell" aria-hidden="true" />
         <div className="pocket-right-spacer" aria-hidden="true" />
       </div>
-      {selectedCompleted && renderCompletedDetail(selectedCompleted)}
-      {selectedCompleted && deleteConfirm?.taskId === selectedCompleted.task.id && renderDeleteConfirmation(selectedCompleted)}
+      {expanded && selectedCompleted && renderCompletedDetail(selectedCompleted)}
+      {expanded && selectedCompleted && deleteConfirm?.taskId === selectedCompleted.task.id && renderDeleteConfirmation(selectedCompleted)}
     </div>;
   };
 
@@ -1122,7 +1463,8 @@ export default function App({ api: injectedApi }: AppProps) {
     const isCurrentBefore = Boolean(dragState?.placement && dragState.placement.parentTaskId === beforePlacement.parentTaskId && dragState.placement.beforeTaskId === beforePlacement.beforeTaskId);
     const isCompleting = pending === `complete:${entry.task.id}`;
     const stateCueClass = entry.task.state === "active" ? "is-active" : entry.task.state === "paused" ? "is-paused" : "";
-    return <div key={entry.task.id} id={`history-task-${entry.task.id}`} className={`tree-branch depth-${Math.min(entry.depth, 4)} ${isCollapsed ? "is-collapsed" : ""}`} data-task-id={entry.task.id} role="treeitem" aria-level={entry.depth + 1} aria-labelledby={`task-label-${entry.task.id}`} aria-describedby={`lifetime-description-${entry.task.id}`} aria-expanded={children.length > 0 ? !isCollapsed : undefined}>
+    const depthStyle = { "--depth": entry.depth, "--depth-offset": `${Math.min(entry.depth, 8) * 12 + 8}px` } as CSSProperties;
+    return <div key={entry.task.id} id={`history-task-${entry.task.id}`} className={`tree-branch depth-${entry.depth} ${isCollapsed ? "is-collapsed" : ""}`} data-task-id={entry.task.id} data-depth={entry.depth} style={depthStyle} role="treeitem" aria-level={entry.depth + 1} aria-labelledby={`task-label-${entry.task.id}`} aria-describedby={`lifetime-description-${entry.task.id}`} aria-expanded={children.length > 0 ? !isCollapsed : undefined}>
       {dragState && <div className={`drop-seam ${isCurrentBefore ? "is-current" : ""} ${beforeValidation?.valid ? "" : "is-invalid"}`} data-drop-target={`before:${entry.task.id}`} data-drop-kind="before" data-drop-parent-id={entry.parentTaskId ?? ""} data-drop-before-id={entry.task.id} data-drop-label={beforePlacement.label} aria-label={`${entry.task.title} の前に配置`} aria-disabled={!beforeValidation?.valid}>
         <span aria-hidden={!isCurrentBefore}>{beforeValidation?.valid ? (dragState.taskId === entry.task.id ? "移動元" : "ここに挿入") : `⛔ ${beforeValidation?.reason}`}</span>
       </div>}
@@ -1137,9 +1479,11 @@ export default function App({ api: injectedApi }: AppProps) {
           <button type="button" className={`completion-box ${isCompleting ? "is-pending" : ""}`} data-focus-id={`complete:${entry.task.id}`} aria-label={isCompleting ? `${entry.task.title}を完了処理中` : `${entry.task.title}を完了にする`} onClick={() => void complete(entry)} disabled={pending !== null}><span className="completion-glyph" aria-hidden="true">{isCompleting ? "···" : "✓"}</span><span className="completion-intent" aria-hidden="true">{isCompleting ? "完了処理中" : "完了"}</span></button>
           <div className="task-copy">
             {editing ? <form ref={renameFormRef} className="rename-form" onBlur={(event) => { const next = event.relatedTarget; if (next instanceof Node && event.currentTarget.contains(next)) return; requestOutsideRename(entry, editingTitleRef.current); }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTaskId(null); } }} onSubmit={(event) => { event.preventDefault(); void saveRename(entry); }}><input id={`task-label-${entry.task.id}`} aria-label={`${entry.task.title}の名前を変更`} defaultValue={entry.task.title} onChange={(event) => { editingTitleRef.current = event.currentTarget.value; }} autoFocus maxLength={240} /><button type="submit" disabled={pending !== null}>保存</button><button type="button" onClick={() => setEditingTaskId(null)}>取消</button></form> : <button id={`task-label-${entry.task.id}`} type="button" className="task-title" data-focus-id={`title:${entry.task.id}`} onDoubleClick={() => beginRename(entry)} onClick={() => beginRename(entry)}>{entry.task.title}</button>}
-            <span className="task-meta"><span className={`state-dot state-${entry.task.state}`} aria-hidden="true" />{stateLabel(entry.task.state)}{children.length > 0 && <span className="child-count">子 {remainingChildren.length}/{children.length}</span>}</span>
+            <span className="task-meta"><span className={`state-dot state-${entry.task.state}`} aria-hidden="true" />{stateLabel(entry.task.state)}<span className="depth-cue" aria-label={`階層 ${entry.depth}`}>階層 {entry.depth}</span>{children.length > 0 && <span className="child-count">子 {remainingChildren.length}/{children.length}</span>}<span className={`memo-presence ${entry.task.memo ? "has-memo" : "is-empty"}`} data-memo-presence={entry.task.memo ? "present" : "empty"} title={entry.task.memo ? "メモあり" : "メモなし"}><span aria-hidden="true">{entry.task.memo ? "▣" : "□"}</span><span className="sr-only">{entry.task.memo ? "メモあり" : "メモなし"}</span></span></span>
+            {selectedTaskId === entry.task.id && entry.depth > 0 && <span className="hierarchy-path" data-ancestry-path={entry.task.id} aria-label={`祖先を含む階層: ${pathLabel(entry, byId)}`}>{pathLabel(entry, byId)}</span>}
           </div>
           <div className={`row-actions ${editing ? "is-suppressed" : ""}`} aria-hidden={editing || undefined}>
+            <button type="button" className="quiet-action memo-action" data-focus-id={`memo:${entry.task.id}`} aria-label={`${entry.task.title}のメモを編集`} onClick={() => openMemo(entry)} disabled={pending !== null}>メモ</button>
             <button type="button" className="quiet-action" data-focus-id={`add-child:${entry.task.id}`} onClick={() => toggleCreateChild(entry)} disabled={pending !== null}>＋子</button>
             <button type="button" className="quiet-action delete-action" data-focus-id={`delete:${entry.task.id}`} onClick={() => beginDelete(entry)} disabled={pending !== null}>削除</button>
           </div>
@@ -1155,7 +1499,7 @@ export default function App({ api: injectedApi }: AppProps) {
 
   return <div className="app-shell" data-preview={previewVariant ?? "tauri"}>
     {previewVariant && <p className="preview-strip" role="note">プレビュー: {previewVariant}</p>}
-    <main className="work-surface" onKeyDown={handleMainKeyDown}>
+    <main className="work-surface" aria-hidden={memoEditor ? true : undefined} onKeyDown={handleMainKeyDown}>
       <header className="compact-topline">
         <div className="now-label sr-only"><span className="now-kicker">NOW</span><span className="now-count">{forest ? remainingCount : "…"}</span><span className="now-caption">残っている仕事</span></div>
         <TopCreateForm disabled={pending !== null} onSubmit={submitTopLevel} />
@@ -1187,7 +1531,7 @@ export default function App({ api: injectedApi }: AppProps) {
       {forest && <>
         <section ref={historySurfaceRef} className="history-surface" aria-labelledby="remaining-title">
           <h1 id="remaining-title" className="sr-only">NOW 残っている仕事</h1>
-          <div ref={historyCompositeRef} className="history-composite" role="tree" tabIndex={0} aria-activedescendant={selectedTaskId ? (selectedEntry && isRemaining(selectedEntry) ? `history-task-${selectedTaskId}` : `history-mark-${selectedTaskId}`) : undefined} onKeyDown={handleHistoryKeyDown}>
+          <div ref={historyCompositeRef} className="history-composite" role="tree" tabIndex={0} aria-activedescendant={activeHistoryDescendantId} onKeyDown={handleHistoryKeyDown}>
             <TimelineRuler range={rangeView} nowMs={displayNowMs} remainingCount={remainingCount} completedCount={completedEntries.length} onCurrentJump={jumpCurrent} onHistoryJump={jumpHistory} />
             <p className="range-legend sr-only" aria-label="作成から現在または完了までの記録。作業時間・進捗率・予定ではありません">作成から現在／完了までの記録 · 作業時間・進捗率・予定ではありません</p>
             <p className="history-help sr-only">履歴を選ぶと、その直下に正確な時刻と操作を表示します。</p>
@@ -1201,5 +1545,14 @@ export default function App({ api: injectedApi }: AppProps) {
       </>}
       {/* Manual keyboard placement is intentionally unavailable in this UI. Pointer drag/drop remains available. */}
     </main>
+    {memoEditor && <MemoDialog
+      editor={memoEditor}
+      pending={pending !== null}
+      onDraftChange={changeMemoDraft}
+      onSave={() => void saveMemo()}
+      onCancel={closeMemo}
+      onReload={() => void reloadMemo()}
+      onRetry={() => void saveMemo()}
+    />}
   </div>;
 }

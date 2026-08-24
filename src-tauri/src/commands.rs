@@ -96,6 +96,24 @@ pub fn rename_task(
 }
 
 #[tauri::command]
+pub fn update_task_memo(
+    state: State<'_, AppState>,
+    task_id: String,
+    memo: String,
+    expected_task_version: i64,
+    effective_instant: String,
+) -> Result<ReversibleChangeResult, DomainError> {
+    let mut connection = lock_database(&state)?;
+    application::update_task_memo(
+        &mut connection,
+        &task_id,
+        &memo,
+        expected_task_version,
+        &effective_instant,
+    )
+}
+
+#[tauri::command]
 pub fn start_task(
     state: State<'_, AppState>,
     task_id: String,

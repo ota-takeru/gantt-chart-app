@@ -70,7 +70,8 @@ pub fn migrate(connection: &Connection) -> Result<(), DomainError> {
                 state TEXT NOT NULL CHECK (state IN ('queued', 'active', 'paused', 'completed')),
                 created_at TEXT NOT NULL,
                 completed_at TEXT,
-                version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0)
+                version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
+                memo TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS queue_entries (
@@ -159,6 +160,31 @@ pub fn migrate(connection: &Connection) -> Result<(), DomainError> {
     // this safe to run repeatedly and also repairs a partially migrated DB
     // without touching existing placement or lifecycle data.
     let transaction = connection.unchecked_transaction().map_err(storage_error)?;
+    let has_memo = {
+        let mut statement = transaction
+            .prepare("PRAGMA table_info(tasks)")
+            .map_err(storage_error)?;
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case("memo"))
+    };
+    if !has_memo {
+        transaction
+            .execute(
+                "ALTER TABLE tasks ADD COLUMN memo TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .map_err(storage_error)?;
+    } else {
+        transaction
+            .execute("UPDATE tasks SET memo = '' WHERE memo IS NULL", [])
+            .map_err(storage_error)?;
+    }
     let mut statement = transaction
         .prepare(
             "SELECT t.id
@@ -320,7 +346,7 @@ pub fn hierarchy_rows(connection: &Connection) -> Result<Vec<HierarchyRow>, Doma
 pub fn hierarchy_task_rows(connection: &Connection) -> Result<Vec<HierarchyTaskRow>, DomainError> {
     let mut statement = connection
         .prepare(
-            "SELECT t.id, t.title, t.state, t.version, t.created_at, t.completed_at,
+            "SELECT t.id, t.title, t.state, t.version, t.created_at, t.memo, t.completed_at,
                     (SELECT MIN(s.started_at) FROM work_sessions s WHERE s.task_id = t.id),
                     h.parent_task_id, h.position
              FROM task_hierarchy h
@@ -344,11 +370,12 @@ pub fn hierarchy_task_rows(connection: &Connection) -> Result<Vec<HierarchyTaskR
                     })?,
                     version: row.get(3)?,
                     created_at: row.get(4)?,
-                    completed_at: row.get(5)?,
-                    actual_start_at: row.get(6)?,
+                    memo: row.get(5)?,
+                    completed_at: row.get(6)?,
+                    actual_start_at: row.get(7)?,
                 },
-                parent_task_id: row.get(7)?,
-                position: row.get(8)?,
+                parent_task_id: row.get(8)?,
+                position: row.get(9)?,
             })
         })
         .map_err(storage_error)?;
@@ -411,7 +438,7 @@ pub fn set_hierarchy_placement(
 pub fn task_snapshot(connection: &Connection, task_id: &str) -> Result<TaskSnapshot, DomainError> {
     connection
         .query_row(
-            "SELECT t.id, t.title, t.state, t.version, t.created_at, t.completed_at,
+            "SELECT t.id, t.title, t.state, t.version, t.created_at, t.memo, t.completed_at,
                     (SELECT MIN(s.started_at) FROM work_sessions s WHERE s.task_id = t.id)
              FROM tasks t WHERE t.id = ?1",
             [task_id],
@@ -436,8 +463,9 @@ pub fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskSnapshot> {
         })?,
         version: row.get(3)?,
         created_at: row.get(4)?,
-        completed_at: row.get(5)?,
-        actual_start_at: row.get(6)?,
+        memo: row.get(5)?,
+        completed_at: row.get(6)?,
+        actual_start_at: row.get(7)?,
     })
 }
 
@@ -558,7 +586,7 @@ pub fn queue_entries(connection: &Connection) -> Result<Vec<QueueEntrySnapshot>,
     let mut statement = connection
         .prepare(
             "SELECT q.task_id, q.position, t.id, t.title, t.state, t.version,
-                    t.created_at, t.completed_at,
+                    t.created_at, t.memo, t.completed_at,
                     (SELECT MIN(s.started_at) FROM work_sessions s WHERE s.task_id = t.id)
              FROM queue_entries q
              JOIN tasks t ON t.id = q.task_id
@@ -583,8 +611,9 @@ pub fn queue_entries(connection: &Connection) -> Result<Vec<QueueEntrySnapshot>,
                     })?,
                     version: row.get(5)?,
                     created_at: row.get(6)?,
-                    completed_at: row.get(7)?,
-                    actual_start_at: row.get(8)?,
+                    memo: row.get(7)?,
+                    completed_at: row.get(8)?,
+                    actual_start_at: row.get(9)?,
                 },
             })
         })
@@ -816,8 +845,8 @@ pub fn insert_task(
 ) -> Result<(), DomainError> {
     transaction
         .execute(
-            "INSERT INTO tasks (id, title, state, created_at, completed_at, version)
-             VALUES (?1, ?2, 'queued', ?3, NULL, 0)",
+            "INSERT INTO tasks (id, title, state, created_at, completed_at, version, memo)
+             VALUES (?1, ?2, 'queued', ?3, NULL, 0, '')",
             params![task_id, title, created_at],
         )
         .map_err(storage_error)?;
@@ -869,6 +898,39 @@ pub fn update_task_title(
             "UPDATE tasks SET title = ?1, version = version + 1
              WHERE id = ?2 AND version = ?3",
             params![title, task_id, expected_version],
+        )
+        .map_err(storage_error)?;
+    if changed == 0 {
+        let exists: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1)",
+                [task_id],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        if !exists {
+            return Err(DomainError::with_detail(
+                "task-not-found",
+                "Task does not exist",
+                task_id,
+            ));
+        }
+        return Err(DomainError::new("stale-version", "Task version is stale"));
+    }
+    Ok(())
+}
+
+pub fn update_task_memo(
+    transaction: &Transaction<'_>,
+    task_id: &str,
+    expected_version: i64,
+    memo: &str,
+) -> Result<(), DomainError> {
+    let changed = transaction
+        .execute(
+            "UPDATE tasks SET memo = ?1, version = version + 1
+             WHERE id = ?2 AND version = ?3",
+            params![memo, task_id, expected_version],
         )
         .map_err(storage_error)?;
     if changed == 0 {

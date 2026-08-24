@@ -33,6 +33,14 @@ describe("TauriTaskApi command boundary", () => {
       effectiveInstant: instant,
     });
 
+    await api.updateTaskMemo("task-1", "  exact\nメモ  ", 4, instant);
+    expect(invokeMock).toHaveBeenLastCalledWith("update_task_memo", {
+      taskId: "task-1",
+      memo: "  exact\nメモ  ",
+      expectedTaskVersion: 4,
+      effectiveInstant: instant,
+    });
+
     await api.startTask("task-1", 3, instant);
     expect(invokeMock).toHaveBeenLastCalledWith("start_task", {
       taskId: "task-1",

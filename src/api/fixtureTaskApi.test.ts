@@ -2,6 +2,71 @@ import { describe, expect, it } from "vitest";
 import { createFixtureTaskApi } from "./fixtureTaskApi";
 
 describe("fixture reversible task operations", () => {
+  it("stores exact memo text, records private audit metadata, and undoes atomically", async () => {
+    const api = createFixtureTaskApi("typical");
+    const before = await api.getTaskForest(5000);
+    const task = before.entries.find((entry) => entry.task.id === "task-next-1")!.task;
+    const memo = "  日本語🙂\n二行目  ";
+    const saved = await api.updateTaskMemo(task.id, memo, task.version, "2026-08-23T06:20:00.000Z");
+
+    expect(saved.sourceRevision).toBe(before.sourceRevision + 1);
+    expect(saved.hierarchyRevision).toBe(before.hierarchyRevision);
+    expect(saved.queueRevision).toBe(before.entries.length ? before.sourceRevision : before.sourceRevision);
+    expect(saved.undoStatus.operationKind).toBe("memo-update");
+    expect((await api.getTask(task.id)).memo).toBe(memo);
+
+    const history = await api.getHistoryByActualRange("2026-08-23T06:19:00.000Z", "2026-08-23T06:21:00.000Z", undefined, 20);
+    expect(history.events[0]).toMatchObject({ eventType: "task-memo-updated", payload: { hasMemo: true, scalarLength: Array.from(memo).length } });
+    expect(JSON.stringify(history.events[0].payload)).not.toContain(memo);
+
+    const noOp = await api.updateTaskMemo(task.id, memo, task.version + 1, "2026-08-23T06:21:00.000Z");
+    expect(noOp.sourceRevision).toBe(saved.sourceRevision);
+    expect(noOp.undoRevision).toBe(saved.undoRevision);
+    expect((await api.getUndoStatus()).operationToken).toBe(saved.undoStatus.operationToken);
+
+    await api.undoLastTaskOperation(saved.undoStatus.operationToken!, "2026-08-23T06:22:00.000Z");
+    expect((await api.getTask(task.id)).memo).toBe("");
+  });
+
+  it("rejects stale, invalid, and over-limit memo writes without changing the fixture", async () => {
+    const api = createFixtureTaskApi("typical");
+    const task = (await api.getTask("task-next-1"));
+    const before = await api.getTaskForest(5000);
+    const token = (await api.getUndoStatus()).operationToken;
+    await expect(api.updateTaskMemo(task.id, "memo", task.version - 1, "2026-08-23T06:20:00.000Z")).rejects.toMatchObject({ code: "stale-version" });
+    await expect(api.updateTaskMemo(task.id, "memo", task.version, "invalid")).rejects.toMatchObject({ code: "invalid-effective-instant" });
+    await expect(api.updateTaskMemo(task.id, "x".repeat(4001), task.version, "2026-08-23T06:20:00.000Z")).rejects.toMatchObject({ code: "invalid-memo" });
+    expect(await api.getTask(task.id)).toEqual(task);
+    expect(await api.getTaskForest(5000)).toMatchObject({ sourceRevision: before.sourceRevision, hierarchyRevision: before.hierarchyRevision });
+    expect((await api.getUndoStatus()).operationToken).toBe(token);
+  });
+
+  it("sums closed fixture sessions and keeps no-session completion distinct", async () => {
+    const api = createFixtureTaskApi("typical");
+    await expect(api.getTaskActualHistory("task-completed")).resolves.toMatchObject({
+      taskId: "task-completed",
+      totalClosedDurationMs: 17 * 60 * 1000,
+      sessionCount: 1,
+    });
+    await expect(api.getTaskActualHistory("task-no-session")).resolves.toMatchObject({
+      taskId: "task-no-session",
+      totalClosedDurationMs: 0,
+      sessionCount: 0,
+    });
+  });
+
+  it("keeps exact depth 0 through 8 and raw before-task anchors usable", async () => {
+    const api = createFixtureTaskApi("deep");
+    const before = await api.getTaskForest(5000);
+    expect(before.entries.map((entry) => entry.depth)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    const anchor = before.entries.find((entry) => entry.task.id === "deep-task-8")!;
+    await api.createTaskInHierarchy("同じ階層のアンカー", "deep-task-7", anchor.task.id, before.hierarchyRevision);
+    const after = await api.getTaskForest(5000);
+    const inserted = after.entries.find((entry) => entry.task.title === "同じ階層のアンカー");
+    expect(inserted).toMatchObject({ parentTaskId: "deep-task-7", depth: 8, position: 0 });
+    expect(after.entries.find((entry) => entry.task.id === "deep-task-8")?.position).toBe(1);
+  });
+
   it("deletes a complete subtree and restores it with one undo", async () => {
     const api = createFixtureTaskApi("typical");
     const before = await api.getTaskForest(5000);

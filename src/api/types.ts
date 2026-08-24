@@ -14,6 +14,7 @@ export interface TaskSnapshot {
   state: TaskState;
   version: number;
   createdAt: string;
+  memo: string;
   completedAt?: string;
   actualStartAt?: string;
 }
@@ -202,7 +203,7 @@ export interface HierarchyChangeResult {
   changedTasks: TaskSnapshot[];
 }
 
-export type UndoOperationKind = "create" | "rename" | "move" | "complete" | "reopen" | "delete";
+export type UndoOperationKind = "create" | "rename" | "move" | "complete" | "reopen" | "delete" | "memo-update";
 
 export interface UndoStatus {
   available: boolean;
@@ -231,6 +232,12 @@ export interface TaskApi {
     expectedVersion: number,
     effectiveInstant?: string,
   ): Promise<TaskSnapshot>;
+  updateTaskMemo(
+    taskId: string,
+    memo: string,
+    expectedTaskVersion: number,
+    effectiveInstant?: string,
+  ): Promise<ReversibleChangeResult>;
   startTask(
     taskId: string,
     expectedVersion: number,
