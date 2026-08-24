@@ -1,0 +1,74 @@
+name: Release Windows app
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Verify tag matches package version
+        shell: pwsh
+        run: |
+          $package = Get-Content -Raw -Path package.json | ConvertFrom-Json
+          $expectedTag = "v$($package.version)"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            Write-Error "Release tag '$env:GITHUB_REF_NAME' does not match package.json version '$($package.version)'; expected '$expectedTag'."
+            exit 1
+          }
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Run frontend type check
+        run: npm run check
+
+      - name: Set up pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # With no explicit toolchain input, this reads rust-toolchain.toml at the repository root.
+          components: rustfmt, clippy
+          cache-workspaces: src-tauri
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Run Rust Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+
+      - name: Build and publish Windows release
+        uses: tauri-apps/tauri-action@v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Gantt Chart ${{ github.ref_name }}
+          releaseBody: Windows NSIS installer and signed updater artifacts for ${{ github.ref_name }}.
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: --bundles nsis

@@ -1,6 +1,10 @@
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
+import packageMetadata from "../package.json";
 import { createFixtureTaskApi, previewVariantFromLocation, type PreviewVariant } from "./api/fixtureTaskApi";
+import { createFixtureUpdateApi } from "./api/fixtureUpdateApi";
 import { isTauriRuntime, TauriTaskApi } from "./api/tauriTaskApi";
+import { TauriUpdateApi } from "./api/tauriUpdateApi";
+import { isUpdateError, normalizeUpdateError, type UpdateApi, type UpdateCandidate, type UpdateError, type UpdateProgress } from "./api/updateApi";
 import {
   type DomainError,
   type ActualHistorySummary,
@@ -12,9 +16,10 @@ import {
   type UndoStatus,
   normalizeDomainError,
 } from "./api/types";
+import { UpdateReceipt, type UpdateReceiptState } from "./UpdateReceipt";
 import "./index.css";
 
-type AppProps = { api?: TaskApi };
+export type AppProps = { api?: TaskApi; updateApi?: UpdateApi; currentVersion?: string };
 type CreateDraft = { parentTaskId: string; returnFocusId: string };
 type Placement = { parentTaskId?: string; beforeTaskId?: string; label: string };
 type DragState = { taskId: string; pointerId: number; placement?: Placement };
@@ -45,6 +50,33 @@ const RANGE_DURATIONS: Record<Exclude<RangePreset, "all">, number> = {
 
 const RANGE_PRESETS: readonly RangePreset[] = ["24h", "7d", "30d", "90d", "all"];
 const MEMO_SCALAR_LIMIT = 4000;
+
+function nextPreviewVersion(currentVersion: string): string {
+  const [major = "0", minor = "0"] = currentVersion.replace(/^v/i, "").split(".");
+  return `${Number(major) || 0}.${(Number(minor) || 0) + 1}.0`;
+}
+
+function previewUpdateRequested(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("update") === "available";
+}
+
+function updateFailure(error: unknown, fallbackCode: UpdateError["code"]): UpdateError {
+  return isUpdateError(error)
+    ? error
+    : normalizeUpdateError(error, fallbackCode, "アプリの更新を完了できませんでした");
+}
+
+function requestUiFrame(callback: FrameRequestCallback): number {
+  return typeof window.requestAnimationFrame === "function"
+    ? window.requestAnimationFrame(callback)
+    : window.setTimeout(() => callback(Date.now()), 16);
+}
+
+function cancelUiFrame(handle: number): void {
+  if (typeof window.cancelAnimationFrame === "function") window.cancelAnimationFrame(handle);
+  else window.clearTimeout(handle);
+}
 
 type MemoEditorState = {
   taskId: string;
@@ -541,10 +573,31 @@ function MemoDialog({ editor, pending, onDraftChange, onSave, onCancel, onReload
   </div>;
 }
 
-export default function App({ api: injectedApi }: AppProps) {
+export default function App({ api: injectedApi, updateApi: injectedUpdateApi, currentVersion = packageMetadata.version }: AppProps) {
   const previewVariant: PreviewVariant | undefined = previewVariantFromLocation();
   const previewMode = Boolean(previewVariant);
   const [api] = useState<TaskApi>(() => injectedApi ?? (isTauriRuntime() ? new TauriTaskApi() : createFixtureTaskApi(previewVariant ?? "empty")));
+  const [updateApi] = useState<UpdateApi>(() => injectedUpdateApi ?? (isTauriRuntime()
+    ? new TauriUpdateApi()
+    : createFixtureUpdateApi({
+      currentVersion,
+      candidate: previewMode && previewUpdateRequested() ? {
+        version: nextPreviewVersion(currentVersion),
+        notes: "作業中のメモを保ったまま更新できるようになりました。\n\n更新の確認と再起動の流れを改善しています。",
+        publishedAt: "2026-08-25T00:00:00.000Z",
+      } : null,
+      progress: [
+        { phase: "download", receivedBytes: 0 },
+        { phase: "download", receivedBytes: 38 * 1024 * 1024, totalBytes: 112 * 1024 * 1024 },
+        { phase: "install", receivedBytes: 112 * 1024 * 1024, totalBytes: 112 * 1024 * 1024 },
+      ],
+    })));
+  const [updateState, setUpdateState] = useState<UpdateReceiptState>({ status: "hidden" });
+  const updateCheckStartedRef = useRef(false);
+  const updateCheckPendingRef = useRef(false);
+  const updateApplyPendingRef = useRef(false);
+  const updateProgressFrameRef = useRef<number | null>(null);
+  const latestUpdateProgressRef = useRef<UpdateProgress | null>(null);
   const [forest, setForest] = useState<TaskForestSnapshot | null>(null);
   const forestRef = useRef<TaskForestSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -590,7 +643,70 @@ export default function App({ api: injectedApi }: AppProps) {
   const actualHistoryRequestRef = useRef(new Map<string, number>());
   const actualHistoryEpochRef = useRef(0);
 
+  const checkForApplicationUpdate = useCallback(async () => {
+    if (updateCheckPendingRef.current || updateApplyPendingRef.current) return;
+    updateCheckPendingRef.current = true;
+    setUpdateState({ status: "hidden" });
+    try {
+      const candidate = await updateApi.checkForUpdate();
+      setUpdateState(candidate ? { status: "available", candidate } : { status: "hidden" });
+    } catch (error: unknown) {
+      setUpdateState({ status: "failed", error: updateFailure(error, "check-failed") });
+    } finally {
+      updateCheckPendingRef.current = false;
+    }
+  }, [updateApi]);
+
+  const applyApplicationUpdate = useCallback(async (candidate: UpdateCandidate) => {
+    if (updateApplyPendingRef.current || updateCheckPendingRef.current) return;
+    updateApplyPendingRef.current = true;
+    latestUpdateProgressRef.current = null;
+    setUpdateState({ status: "applying", candidate, progress: { phase: "download", receivedBytes: 0 } });
+    try {
+      await updateApi.applyUpdate(candidate, (progress) => {
+        latestUpdateProgressRef.current = progress;
+        if (progress.phase === "install") {
+          if (updateProgressFrameRef.current !== null) cancelUiFrame(updateProgressFrameRef.current);
+          updateProgressFrameRef.current = null;
+          setUpdateState({ status: "applying", candidate, progress });
+          return;
+        }
+        if (updateProgressFrameRef.current !== null) return;
+        updateProgressFrameRef.current = requestUiFrame(() => {
+          updateProgressFrameRef.current = null;
+          const latest = latestUpdateProgressRef.current;
+          if (latest) setUpdateState({ status: "applying", candidate, progress: latest });
+        });
+      });
+      if (updateProgressFrameRef.current !== null) cancelUiFrame(updateProgressFrameRef.current);
+      updateProgressFrameRef.current = null;
+      setUpdateState({ status: "relaunching", candidate });
+      try {
+        await updateApi.relaunchApplication();
+        setUpdateState({ status: "hidden" });
+      } catch (error: unknown) {
+        setUpdateState({ status: "failed", candidate, error: updateFailure(error, "relaunch-failed") });
+      }
+    } catch (error: unknown) {
+      if (updateProgressFrameRef.current !== null) cancelUiFrame(updateProgressFrameRef.current);
+      updateProgressFrameRef.current = null;
+      setUpdateState({ status: "failed", candidate, error: updateFailure(error, "download-failed") });
+    } finally {
+      updateApplyPendingRef.current = false;
+    }
+  }, [updateApi]);
+
   useFocusRestoration(focusReturnId);
+
+  useEffect(() => {
+    if (updateCheckStartedRef.current) return;
+    updateCheckStartedRef.current = true;
+    void checkForApplicationUpdate();
+  }, [checkForApplicationUpdate]);
+
+  useEffect(() => () => {
+    if (updateProgressFrameRef.current !== null) cancelUiFrame(updateProgressFrameRef.current);
+  }, []);
 
   useEffect(() => { editingTaskIdRef.current = editingTaskId; }, [editingTaskId]);
   useEffect(() => { memoEditorRef.current = memoEditor; }, [memoEditor]);
@@ -1554,5 +1670,12 @@ export default function App({ api: injectedApi }: AppProps) {
       onReload={() => void reloadMemo()}
       onRetry={() => void saveMemo()}
     />}
+    <UpdateReceipt
+      runningVersion={currentVersion}
+      state={updateState}
+      onLater={() => setUpdateState({ status: "hidden" })}
+      onApply={(candidate) => void applyApplicationUpdate(candidate)}
+      onCheckAgain={() => void checkForApplicationUpdate()}
+    />
   </div>;
 }

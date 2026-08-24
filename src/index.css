@@ -781,3 +781,89 @@ body.memo-modal-open { overflow: hidden; }
   .memo-dialog-status.is-error { border-color: ButtonText; background: Canvas; color: CanvasText; }
   .memo-presence.has-memo { border-color: ButtonText; color: ButtonText; }
 }
+
+/* Direction A: application maintenance is a fixed edge operation receipt.
+   It never participates in the task/timeline layout, so candidate arrival and
+   every subsequent stage leave dense row geometry untouched. */
+.update-receipt {
+  position: fixed;
+  z-index: 80;
+  left: 16px;
+  bottom: 16px;
+  width: min(390px, calc(100vw - 32px));
+  max-height: min(52vh, 430px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--ink);
+  border-top: 4px solid var(--accent);
+  background: var(--paper);
+  padding: 12px;
+  color: var(--ink);
+  box-shadow: 0 12px 28px var(--surface-shadow);
+  contain: layout paint;
+  animation: motion-panel-enter var(--duration-fast) var(--ease-enter) both;
+}
+.update-receipt.is-error { border-top-color: var(--danger); }
+.update-version-handoff { display: grid; grid-template-columns: minmax(0, auto) auto minmax(0, 1fr); align-items: baseline; gap: 7px; margin: 0; font-size: 15px; font-variant-numeric: tabular-nums; }
+.update-version-current { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.update-version-arrow { color: var(--muted); }
+.update-version-handoff strong { font-size: 17px; letter-spacing: .02em; }
+.update-receipt-summary { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.update-receipt-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
+.update-receipt button { min-height: 34px; cursor: pointer; }
+.update-quiet-action, .update-notes-action { border: 1px solid var(--line); background: transparent; padding: 5px 9px; color: var(--ink); font-size: 12px; }
+.update-notes-action { margin-right: auto; border-style: dashed; color: var(--accent); }
+.update-primary-action { border: 1px solid var(--accent); background: var(--accent); padding: 5px 11px; color: var(--on-accent); font-size: 12px; font-weight: 700; }
+.update-primary-action:hover { border-color: var(--ink); background: var(--ink); }
+.update-progress-stage { margin-top: 9px; }
+.update-stage-label { display: block; font-size: 13px; font-weight: 800; }
+.update-progress-copy { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.update-progress-track { position: relative; height: 7px; margin-top: 7px; overflow: hidden; border: 1px solid var(--line); background: var(--soft); }
+.update-progress-fill { display: block; width: 100%; height: 100%; transform: scaleX(.36); transform-origin: left center; background: var(--accent); transition: transform var(--duration-fast) linear; }
+.update-progress-track.is-indeterminate .update-progress-fill { width: 28%; animation: update-progress-indeterminate 1.3s var(--ease-standard) infinite alternate; }
+.update-error-title { display: block; margin-top: 8px; font-size: 13px; }
+.update-error-detail, .update-manual-restart { margin: 5px 0 0; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.update-manual-restart { border-left: 3px solid var(--danger); padding-left: 8px; color: var(--ink); }
+
+.update-notes-layer {
+  position: fixed;
+  z-index: 81;
+  left: 16px;
+  bottom: min(230px, 34vh);
+  display: flex;
+  flex-direction: column;
+  width: min(460px, calc(100vw - 32px));
+  max-height: min(54vh, 520px);
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 12px 28px var(--surface-shadow);
+}
+.update-notes-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: var(--soft); padding: 10px 12px; }
+.update-receipt-kicker { display: block; color: var(--muted); font-size: 10px; letter-spacing: .08em; }
+.update-notes-header h2 { margin: 2px 0 0; font-size: 15px; }
+.update-notes-header h2:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.update-published-at { margin: 8px 12px 0; color: var(--muted); font-size: 11px; }
+.update-notes-copy { overflow-y: auto; overscroll-behavior: contain; padding: 2px 12px 12px; font-size: 12px; line-height: 1.6; }
+.update-notes-copy p { margin: 9px 0 0; white-space: pre-wrap; }
+.update-notes-break { display: block; height: 3px; }
+
+@keyframes update-progress-indeterminate {
+  from { transform: translateX(-10%); }
+  to { transform: translateX(260%); }
+}
+
+@media (max-width: 720px), (max-height: 620px) {
+  .update-receipt { right: 10px; bottom: 10px; left: 10px; width: auto; max-height: 48vh; }
+  .update-receipt-actions { align-items: stretch; }
+  .update-receipt-actions button { flex: 1 1 auto; }
+  .update-notes-action { margin-right: 0; }
+  .update-notes-layer { inset: 10px 10px auto; width: auto; max-height: calc(52vh - 12px); }
+}
+
+@media (forced-colors: active) {
+  .update-receipt, .update-notes-layer, .update-progress-track, .update-quiet-action, .update-notes-action, .update-primary-action { border-color: ButtonText; background: Canvas; color: CanvasText; box-shadow: none; }
+  .update-receipt { border-top-width: 4px; }
+  .update-progress-fill, .update-primary-action { background: ButtonText; color: ButtonFace; }
+  .update-manual-restart { border-color: ButtonText; }
+}

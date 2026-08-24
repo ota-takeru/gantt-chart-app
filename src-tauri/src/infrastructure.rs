@@ -9,6 +9,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub const ORDER_GAP: i64 = 1_024;
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HierarchyRow {
@@ -44,8 +45,65 @@ fn configure_connection(connection: &Connection) -> Result<(), DomainError> {
         .map_err(storage_error)
 }
 
-pub fn migrate(connection: &Connection) -> Result<(), DomainError> {
+/// Return the schema version recorded by SQLite for this connection.
+pub fn schema_version(connection: &Connection) -> Result<i64, DomainError> {
     connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(storage_error)
+}
+
+/// Apply each unapplied schema migration in its own transaction.
+///
+/// Version zero is the state of databases created before explicit migration
+/// bookkeeping was introduced.  The migrations are intentionally additive and
+/// use `IF NOT EXISTS`/column inspection so those databases retain all tasks,
+/// metadata, history, and memo text they already contain.
+pub fn migrate(connection: &Connection) -> Result<i64, DomainError> {
+    let current = schema_version(connection)?;
+    if current > CURRENT_SCHEMA_VERSION {
+        return Err(DomainError::with_detail(
+            "schema-too-new",
+            "The database schema is newer than this application",
+            current.to_string(),
+        ));
+    }
+
+    let mut version = current;
+    while version < CURRENT_SCHEMA_VERSION {
+        let next_version = version + 1;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|_| migration_failed())?;
+        let result = match next_version {
+            1 => migrate_v1(&transaction),
+            2 => migrate_v2(&transaction),
+            3 => migrate_v3(&transaction),
+            _ => Err(DomainError::new(
+                "migration-failed",
+                "No migration exists for the requested schema version",
+            )),
+        };
+        if result.is_err() {
+            return Err(migration_failed());
+        }
+        transaction
+            .execute_batch(&format!("PRAGMA user_version = {next_version};"))
+            .map_err(|_| migration_failed())?;
+        transaction.commit().map_err(|_| migration_failed())?;
+        version = next_version;
+    }
+    Ok(version)
+}
+
+fn migration_failed() -> DomainError {
+    DomainError::new(
+        "migration-failed",
+        "The database migration could not be completed",
+    )
+}
+
+fn migrate_v1(transaction: &Transaction<'_>) -> Result<(), DomainError> {
+    transaction
         .execute_batch(
             "
             CREATE TABLE IF NOT EXISTS app_metadata (
@@ -70,19 +128,12 @@ pub fn migrate(connection: &Connection) -> Result<(), DomainError> {
                 state TEXT NOT NULL CHECK (state IN ('queued', 'active', 'paused', 'completed')),
                 created_at TEXT NOT NULL,
                 completed_at TEXT,
-                version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
-                memo TEXT NOT NULL DEFAULT ''
+                version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0)
             );
 
             CREATE TABLE IF NOT EXISTS queue_entries (
                 task_id TEXT PRIMARY KEY NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
                 position INTEGER NOT NULL UNIQUE
-            );
-
-            CREATE TABLE IF NOT EXISTS task_hierarchy (
-                task_id TEXT PRIMARY KEY NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-                parent_task_id TEXT REFERENCES tasks(id) ON DELETE RESTRICT,
-                position INTEGER NOT NULL CHECK (position >= 0)
             );
 
             CREATE TABLE IF NOT EXISTS work_sessions (
@@ -137,10 +188,6 @@ pub fn migrate(connection: &Connection) -> Result<(), DomainError> {
                 ON work_sessions (task_id) WHERE ended_at IS NULL;
             CREATE INDEX IF NOT EXISTS queue_entries_position_idx
                 ON queue_entries (position, task_id);
-            CREATE UNIQUE INDEX IF NOT EXISTS task_hierarchy_sibling_position_idx
-                ON task_hierarchy (COALESCE(parent_task_id, ''), position);
-            CREATE INDEX IF NOT EXISTS task_hierarchy_parent_position_idx
-                ON task_hierarchy (parent_task_id, position, task_id);
             CREATE INDEX IF NOT EXISTS task_events_task_time_idx
                 ON task_events (task_id, occurred_at, id);
             CREATE INDEX IF NOT EXISTS task_events_time_idx
@@ -153,13 +200,10 @@ pub fn migrate(connection: &Connection) -> Result<(), DomainError> {
                 ON work_sessions (ended_at, started_at);
             ",
         )
-        .map_err(storage_error)?;
+        .map_err(storage_error)
+}
 
-    // Older databases have no hierarchy rows.  Add missing tasks in a stable
-    // creation order, always as top-level entries.  The INSERT OR IGNORE makes
-    // this safe to run repeatedly and also repairs a partially migrated DB
-    // without touching existing placement or lifecycle data.
-    let transaction = connection.unchecked_transaction().map_err(storage_error)?;
+fn migrate_v2(transaction: &Transaction<'_>) -> Result<(), DomainError> {
     let has_memo = {
         let mut statement = transaction
             .prepare("PRAGMA table_info(tasks)")
@@ -185,6 +229,28 @@ pub fn migrate(connection: &Connection) -> Result<(), DomainError> {
             .execute("UPDATE tasks SET memo = '' WHERE memo IS NULL", [])
             .map_err(storage_error)?;
     }
+    Ok(())
+}
+
+fn migrate_v3(transaction: &Transaction<'_>) -> Result<(), DomainError> {
+    transaction
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS task_hierarchy (
+                task_id TEXT PRIMARY KEY NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                parent_task_id TEXT REFERENCES tasks(id) ON DELETE RESTRICT,
+                position INTEGER NOT NULL CHECK (position >= 0)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS task_hierarchy_sibling_position_idx
+                ON task_hierarchy (COALESCE(parent_task_id, ''), position);
+            CREATE INDEX IF NOT EXISTS task_hierarchy_parent_position_idx
+                ON task_hierarchy (parent_task_id, position, task_id);
+            ",
+        )
+        .map_err(storage_error)?;
+
+    // Legacy databases have no hierarchy rows. Add missing tasks in stable
+    // creation order as top-level entries without touching existing placement.
     let mut statement = transaction
         .prepare(
             "SELECT t.id
@@ -224,7 +290,7 @@ pub fn migrate(connection: &Connection) -> Result<(), DomainError> {
             )
         })?;
     }
-    transaction.commit().map_err(storage_error)
+    Ok(())
 }
 
 pub fn new_id() -> String {
@@ -951,4 +1017,286 @@ pub fn update_task_memo(
         return Err(DomainError::new("stale-version", "Task version is stale"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn stored_user_version(connection: &Connection) -> i64 {
+        schema_version(connection).expect("schema version")
+    }
+
+    fn migrate_to_version_one(connection: &Connection) {
+        let transaction = connection
+            .unchecked_transaction()
+            .expect("migration transaction");
+        migrate_v1(&transaction).expect("version one migration");
+        transaction
+            .execute_batch("PRAGMA user_version = 1;")
+            .expect("version one marker");
+        transaction.commit().expect("version one commit");
+    }
+
+    fn migrate_to_version_two(connection: &Connection) {
+        let transaction = connection
+            .unchecked_transaction()
+            .expect("migration transaction");
+        migrate_v2(&transaction).expect("version two migration");
+        transaction
+            .execute_batch("PRAGMA user_version = 2;")
+            .expect("version two marker");
+        transaction.commit().expect("version two commit");
+    }
+
+    #[test]
+    fn from_zero_applies_ordered_migrations_to_current_schema() {
+        let connection = Connection::open_in_memory().expect("database");
+        assert_eq!(stored_user_version(&connection), 0);
+
+        assert_eq!(
+            migrate(&connection).expect("migration"),
+            CURRENT_SCHEMA_VERSION
+        );
+        assert_eq!(stored_user_version(&connection), CURRENT_SCHEMA_VERSION);
+        for table in [
+            "app_metadata",
+            "metadata",
+            "tasks",
+            "queue_entries",
+            "task_hierarchy",
+            "work_sessions",
+            "task_events",
+            "undo_journal",
+            "undo_audit",
+        ] {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("table lookup");
+            assert!(exists, "missing table {table}");
+        }
+        let memo_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'memo')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("memo lookup");
+        assert!(memo_exists);
+    }
+
+    #[test]
+    fn migration_is_idempotent_and_preserves_metadata_and_memo() {
+        let connection = Connection::open_in_memory().expect("database");
+        migrate(&connection).expect("first migration");
+        connection
+            .execute(
+                "INSERT INTO app_metadata (key, value) VALUES ('workspace', 'preserved')",
+                [],
+            )
+            .expect("metadata");
+        connection
+            .execute(
+                "INSERT INTO tasks (id, title, state, created_at, version, memo)
+                 VALUES ('memo-task', 'Memo', 'queued', '2026-08-25T00:00:00Z', 4, 'exact memo')",
+                [],
+            )
+            .expect("task");
+        connection
+            .execute(
+                "INSERT INTO task_hierarchy (task_id, parent_task_id, position)
+                 VALUES ('memo-task', NULL, 0)",
+                [],
+            )
+            .expect("hierarchy");
+
+        assert_eq!(
+            migrate(&connection).expect("second migration"),
+            CURRENT_SCHEMA_VERSION
+        );
+        assert_eq!(stored_user_version(&connection), CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT value FROM app_metadata WHERE key = 'workspace'",
+                    [],
+                    |row| { row.get::<_, String>(0) }
+                )
+                .expect("metadata value"),
+            "preserved"
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT memo FROM tasks WHERE id = 'memo-task'", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .expect("memo value"),
+            "exact memo"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM task_hierarchy WHERE task_id = 'memo-task'",
+                    [],
+                    |row| { row.get::<_, i64>(0) }
+                )
+                .expect("hierarchy row"),
+            1
+        );
+    }
+
+    #[test]
+    fn legacy_database_without_memo_preserves_rows_and_defaults_memo() {
+        let connection = Connection::open_in_memory().expect("database");
+        connection
+            .execute_batch(
+                "CREATE TABLE metadata (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+                 INSERT INTO metadata (key, value) VALUES ('source_revision', '17');
+                 CREATE TABLE tasks (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   title TEXT NOT NULL,
+                   state TEXT NOT NULL,
+                   created_at TEXT NOT NULL,
+                   completed_at TEXT,
+                   version INTEGER NOT NULL
+                 );
+                 INSERT INTO tasks VALUES ('legacy', 'Legacy task', 'queued', '2026-01-01T00:00:00Z', NULL, 9);",
+            )
+            .expect("legacy database");
+
+        migrate(&connection).expect("legacy migration");
+        assert_eq!(stored_user_version(&connection), CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT title, version, memo FROM tasks WHERE id = 'legacy'",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    }
+                )
+                .expect("legacy task"),
+            ("Legacy task".to_string(), 9, String::new())
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT value FROM metadata WHERE key = 'source_revision'",
+                    [],
+                    |row| { row.get::<_, String>(0) }
+                )
+                .expect("legacy metadata"),
+            "17"
+        );
+    }
+
+    #[test]
+    fn a_multi_version_jump_runs_each_pending_migration_in_order() {
+        let connection = Connection::open_in_memory().expect("database");
+        migrate_to_version_one(&connection);
+        connection
+            .execute(
+                "INSERT INTO tasks (id, title, state, created_at, version)
+                 VALUES ('jump-task', 'Jump', 'queued', '2026-08-25T00:00:00Z', 2)",
+                [],
+            )
+            .expect("legacy task");
+
+        assert_eq!(
+            migrate(&connection).expect("multi-version migration"),
+            CURRENT_SCHEMA_VERSION
+        );
+        assert_eq!(stored_user_version(&connection), CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            connection
+                .query_row("SELECT memo FROM tasks WHERE id = 'jump-task'", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .expect("memo after jump"),
+            ""
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM task_hierarchy WHERE task_id = 'jump-task'",
+                    [],
+                    |row| { row.get::<_, i64>(0) }
+                )
+                .expect("hierarchy after jump"),
+            1
+        );
+    }
+
+    #[test]
+    fn too_new_schema_is_rejected_without_changes() {
+        let connection = Connection::open_in_memory().expect("database");
+        connection
+            .execute_batch("CREATE TABLE sentinel (value TEXT); PRAGMA user_version = 99;")
+            .expect("future database");
+        let error = migrate(&connection).expect_err("future schema should fail");
+        assert_eq!(error.code, "schema-too-new");
+        assert_eq!(stored_user_version(&connection), 99);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'tasks'",
+                    [],
+                    |row| { row.get::<_, i64>(0) }
+                )
+                .expect("schema remains unchanged"),
+            0
+        );
+    }
+
+    #[test]
+    fn failed_migration_rolls_back_the_current_version_transaction() {
+        let connection = Connection::open_in_memory().expect("database");
+        migrate_to_version_one(&connection);
+        migrate_to_version_two(&connection);
+        connection
+            .execute_batch(
+                "CREATE TABLE task_hierarchy (
+                   task_id TEXT PRIMARY KEY NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                   parent_task_id TEXT REFERENCES tasks(id) ON DELETE RESTRICT,
+                   position INTEGER NOT NULL CHECK (position >= 0)
+                 );
+                 CREATE TRIGGER reject_hierarchy_insert
+                 BEFORE INSERT ON task_hierarchy
+                 BEGIN SELECT RAISE(ABORT, 'test migration failure'); END;
+                 INSERT INTO tasks (id, title, state, created_at, version, memo)
+                 VALUES ('rollback-task', 'Rollback', 'queued', '2026-08-25T00:00:00Z', 0, 'kept');",
+            )
+            .expect("rollback fixture");
+
+        let error = migrate(&connection).expect_err("migration should fail");
+        assert_eq!(error.code, "migration-failed");
+        assert_eq!(stored_user_version(&connection), 2);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT memo FROM tasks WHERE id = 'rollback-task'",
+                    [],
+                    |row| { row.get::<_, String>(0) }
+                )
+                .expect("task preserved"),
+            "kept"
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'task_hierarchy_sibling_position_idx'", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .expect("index rollback"),
+            0
+        );
+    }
 }

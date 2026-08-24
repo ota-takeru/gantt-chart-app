@@ -371,3 +371,20 @@ export function normalizeDomainError(error: unknown): DomainError {
   }
   return { code: "persistence-failure", message: String(error) };
 }
+
+// Keep the update capability discoverable alongside the existing UI-neutral
+// API types without coupling task callers to a particular adapter.
+export type {
+  AppliedUpdate,
+  UpdateApi,
+  UpdateCandidate,
+  UpdateError,
+  UpdateErrorCode,
+  UpdateProgress,
+  UpdateProgressObserver,
+} from "./updateApi";
+export {
+  compareUpdateVersions,
+  isUpdateError,
+  normalizeUpdateError,
+} from "./updateApi";
