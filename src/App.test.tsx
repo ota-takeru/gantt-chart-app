@@ -308,7 +308,7 @@ describe("history-left / NOW-right surface", () => {
     await userEvent.type(input, "キャッシュの再現条件を確認");
     await userEvent.click(within(parent).getByRole("button", { name: "追加" }));
     await waitFor(() => expect(create).toHaveBeenCalledWith("キャッシュの再現条件を確認", "task-api", "task-next-1", 4, expect.any(String)));
-    expect(screen.getByText("キャッシュの再現条件を確認", { selector: ".task-title" })).toBeInTheDocument();
+    expect(await screen.findByText("キャッシュの再現条件を確認", { selector: ".task-title" })).toBeInTheDocument();
   });
 
   it("inserts a new root before the first raw sibling anchor", async () => {
@@ -388,6 +388,7 @@ describe("history-left / NOW-right surface", () => {
     const topInput = screen.getByRole("textbox", { name: "新しいタスク" });
     await userEvent.type(topInput, "外側保存前");
     await userEvent.click(screen.getByRole("button", { name: "トップレベルに追加" }));
+    await screen.findByText("外側保存前", { selector: ".task-title" });
     const row = rowFor("外側保存前");
     const taskRow = row.querySelector(".task-row") as HTMLElement;
     const taskId = taskRow.dataset.rowId as string;
