@@ -646,10 +646,12 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
   const checkForApplicationUpdate = useCallback(async () => {
     if (updateCheckPendingRef.current || updateApplyPendingRef.current) return;
     updateCheckPendingRef.current = true;
-    setUpdateState({ status: "hidden" });
     try {
       const candidate = await updateApi.checkForUpdate();
-      setUpdateState(candidate ? { status: "available", candidate } : { status: "hidden" });
+      setUpdateState((current) => {
+        if (candidate) return { status: "available", candidate };
+        return current.status === "hidden" ? current : { status: "hidden" };
+      });
     } catch (error: unknown) {
       setUpdateState({ status: "failed", error: updateFailure(error, "check-failed") });
     } finally {
