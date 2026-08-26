@@ -569,12 +569,14 @@ function containsRemainingDescendant(entries: HierarchyEntry[], taskId: string):
   return descendantsOf(entries, taskId).some(isRemaining);
 }
 
-function useFocusRestoration(focusId: string | null) {
-  useEffect(() => {
-    if (!focusId || focusId.startsWith("drag-handle:")) return;
+function useFocusRestoration(focusId: string | null, blocked: boolean, onRestored: (focusId: string) => void) {
+  useLayoutEffect(() => {
+    if (blocked || !focusId || focusId.startsWith("drag-handle:")) return;
     const target = document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(focusId)}"]`);
-    target?.focus({ preventScroll: true });
-  }, [focusId]);
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    if (document.activeElement === target) onRestored(focusId);
+  }, [blocked, focusId, onRestored]);
 }
 
 type MemoDialogProps = {
@@ -798,7 +800,10 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     }
   }, [updateApi]);
 
-  useFocusRestoration(focusReturnId);
+  const clearRestoredFocus = useCallback((restoredFocusId: string) => {
+    setFocusReturnId((current) => current === restoredFocusId ? null : current);
+  }, []);
+  useFocusRestoration(focusReturnId, pending !== null || loading || refreshing, clearRestoredFocus);
 
   useEffect(() => {
     if (updateCheckStartedRef.current) return;
@@ -1091,10 +1096,11 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     try {
       const snapshot = await api.getTaskForest(FOREST_LIMIT);
       forestRef.current = snapshot;
-      startTransition(() => {
-        setForest(snapshot);
-        setFocusReturnId(restoreFocusId ?? null);
-      });
+      // A refreshed forest is committed source-of-truth, not speculative UI.
+      // Keep it at normal priority so callers that await this load cannot close
+      // an editor and immediately reopen it against the previous task version.
+      setForest(snapshot);
+      setFocusReturnId(restoreFocusId ?? null);
       setForestLoadToken((current) => current + 1);
     } catch (reason) {
       setLoadError(normalizeDomainError(reason));
