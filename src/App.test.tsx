@@ -1049,6 +1049,7 @@ describe("history-left / NOW-right surface", () => {
     await userEvent.type(screen.getByRole("textbox", { name: "新しいタスク" }), "親タスク");
     await userEvent.click(screen.getByRole("button", { name: "トップレベルに追加" }));
     await waitFor(() => expect(create).toHaveBeenCalledWith("親タスク", undefined, undefined, 0, expect.any(String)));
+    await screen.findByText("親タスク", { selector: ".task-title" });
 
     const parent = rowFor("親タスク");
     await userEvent.click(within(parent).getByRole("button", { name: "＋子" }));
