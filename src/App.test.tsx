@@ -217,8 +217,10 @@ describe("history-left / NOW-right surface", () => {
     expect(getComputedStyle(ordinaryRail).width).toBe("100%");
     expect(getComputedStyle(pocketTrack).width).toBe("100%");
     expect(getComputedStyle(timelineCell("task-api")).paddingLeft).toBe(getComputedStyle(pocketFor("task-completed")).paddingLeft);
-    expect(getComputedStyle(timelineCell("task-api")).borderLeftWidth).toBe(getComputedStyle(pocketFor("task-completed")).borderLeftWidth);
-    expect(getComputedStyle(timelineCell("task-api")).borderRightWidth).toBe(getComputedStyle(pocketFor("task-completed")).borderRightWidth);
+    expect(Number.parseFloat(getComputedStyle(timelineCell("task-api")).borderLeftWidth) || 0).toBe(0);
+    expect(Number.parseFloat(getComputedStyle(pocketFor("task-completed")).borderLeftWidth) || 0).toBe(0);
+    expect(Number.parseFloat(getComputedStyle(timelineCell("task-api")).borderRightWidth) || 0).toBe(0);
+    expect(Number.parseFloat(getComputedStyle(pocketFor("task-completed")).borderRightWidth) || 0).toBe(0);
     expect(getComputedStyle(lanes).paddingLeft).toBe("0px");
     expect(getComputedStyle(lanes).paddingRight).toBe("0px");
 
@@ -275,7 +277,8 @@ describe("history-left / NOW-right surface", () => {
     const bar = row.querySelector(".lifetime-bar") as HTMLElement;
     expect(row).toHaveClass("is-selected");
     expect(getComputedStyle(mark).backgroundColor).toBe("rgb(237, 247, 242)");
-    expect(getComputedStyle(hinge).backgroundColor).toBe("rgb(230, 241, 237)");
+    const restingHinge = timelineCell("task-answer").closest(".history-row")?.querySelector(".now-hinge-cell") as HTMLElement;
+    expect(getComputedStyle(hinge).backgroundColor).toBe(getComputedStyle(restingHinge).backgroundColor);
     expect(getComputedStyle(identity).boxShadow).toContain("inset");
     expect(getComputedStyle(bar).boxShadow).toContain("0 0 0 1px");
   });
@@ -298,9 +301,9 @@ describe("history-left / NOW-right surface", () => {
     expect(pocket.querySelectorAll(".pocket-member-title")).toHaveLength(0);
     await expandPocket("only-completed-root");
     expect(pocket.querySelectorAll(".pocket-member-row")).toHaveLength(2);
-    expect(within(pocket).getByRole("button", { name: "完了した調査をまとめるを選択" })).toBeInTheDocument();
-    expect(within(pocket).getByRole("button", { name: "完了した確認項目を選択" })).toBeInTheDocument();
-    expect(within(pocket).getByRole("button", { name: "完了した確認項目を選択" })).toHaveTextContent("└完了した確認項目");
+    expect(within(pocket).getByRole("option", { name: /完了した調査をまとめる。/ })).toBeInTheDocument();
+    expect(within(pocket).getByRole("option", { name: /完了した確認項目。/ })).toBeInTheDocument();
+    expect(within(pocket).getByRole("option", { name: /完了した確認項目。/ })).toHaveTextContent("└完了した確認項目");
     expect(timelineCell("only-completed-child")).toHaveAttribute("data-start-ms", String(Date.parse("2026-08-22T03:30:00.000Z")));
   });
 
@@ -315,7 +318,7 @@ describe("history-left / NOW-right surface", () => {
     expect(history).toHaveAttribute("aria-activedescendant", "history-pocket-caption-only-completed-root");
     fireEvent.keyDown(history, { key: "ArrowDown" });
     expect(pocket).toHaveClass("is-expanded");
-    expect(history).toHaveAttribute("aria-activedescendant", "history-mark-only-completed-child");
+    expect(history).toHaveAttribute("aria-activedescendant", "history-member-row-only-completed-child");
     expect(document.querySelector("[data-selected-readout='only-completed-child']")).toBeInTheDocument();
   });
 
@@ -325,8 +328,11 @@ describe("history-left / NOW-right surface", () => {
     await expandPocket("task-completed");
     const history = screen.getByRole("tree");
     const marks = Array.from(document.querySelectorAll<HTMLElement>(".pocket-mark"));
+    const members = Array.from(document.querySelectorAll<HTMLElement>(".pocket-member-row"));
     expect(marks.length).toBeGreaterThan(0);
-    expect(marks.every((mark) => mark.tabIndex === -1)).toBe(true);
+    expect(members.every((member) => member.tabIndex === -1)).toBe(true);
+    expect(members.every((member) => member.querySelectorAll("button").length === 0)).toBe(true);
+    expect(marks.every((mark) => !mark.hasAttribute("tabindex"))).toBe(true);
     history.focus();
     fireEvent.keyDown(history, { key: "Home" });
     fireEvent.keyDown(history, { key: "ArrowDown" });
@@ -352,6 +358,7 @@ describe("history-left / NOW-right surface", () => {
     const create = vi.spyOn(api, "createTaskInHierarchy");
     await ready();
     const parent = rowFor("APIレスポンス遅延の原因を切り分ける");
+    await userEvent.click(timelineCell("task-api"));
     await userEvent.click(within(parent.querySelector(".task-row") as HTMLElement).getByRole("button", { name: "＋子" }));
     const input = within(parent).getByRole("textbox", { name: "APIレスポンス遅延の原因を切り分けるのサブタスク" });
     await userEvent.type(input, "キャッシュの再現条件を確認");
@@ -502,6 +509,7 @@ describe("history-left / NOW-right surface", () => {
     renderPreview("typical");
     await ready();
     const row = rowFor("APIレスポンス遅延の原因を切り分ける");
+    await userEvent.click(timelineCell("task-api"));
     const deleteButton = within(row.querySelector(".task-row") as HTMLElement).getByRole("button", { name: "削除" });
     await userEvent.click(deleteButton);
     const confirmation = document.querySelector("[data-delete-confirm='task-api']") as HTMLElement;
@@ -519,6 +527,7 @@ describe("history-left / NOW-right surface", () => {
     const deleteCall = vi.spyOn(api, "deleteTaskSubtree");
     await ready();
     const leaf = rowFor("明日の調査メモを残す");
+    await userEvent.click(timelineCell("task-next-6"));
     const leafDelete = within(leaf.querySelector(".task-row") as HTMLElement).getByRole("button", { name: "削除" });
     await userEvent.click(leafDelete);
     expect(screen.getByText("「明日の調査メモを残す」を削除します")).toBeInTheDocument();
@@ -528,6 +537,7 @@ describe("history-left / NOW-right surface", () => {
     expect(rowFor("明日の調査メモを残す")).toBeInTheDocument();
 
     const parent = rowFor("APIレスポンス遅延の原因を切り分ける");
+    await userEvent.click(timelineCell("task-api"));
     const parentDelete = within(parent.querySelector(".task-row") as HTMLElement).getByRole("button", { name: "削除" });
     await userEvent.click(parentDelete);
     expect(screen.getByText(/「APIレスポンス遅延の原因を切り分ける」と子孫3件を削除します/)).toBeInTheDocument();
@@ -535,6 +545,7 @@ describe("history-left / NOW-right surface", () => {
     fireEvent.keyDown(screen.getByRole("button", { name: "キャンセル" }), { key: "Escape" });
     await waitFor(() => expect(document.activeElement).toBe(parentDelete));
 
+    await userEvent.click(timelineCell("task-next-6"));
     await userEvent.click(within(rowFor("明日の調査メモを残す").querySelector(".task-row") as HTMLElement).getByRole("button", { name: "削除" }));
     await userEvent.click(screen.getByRole("button", { name: "削除する" }));
     await waitFor(() => expect(deleteCall).toHaveBeenCalledWith("task-next-6", 1, 4, expect.any(String)));
@@ -554,7 +565,7 @@ describe("history-left / NOW-right surface", () => {
     expect(document.querySelector("[data-selected-readout='task-next-6']")).toBeNull();
     expect(screen.getByRole("tree")).toHaveAttribute("aria-activedescendant", "history-pocket-caption-task-next-6");
     await expandPocket("task-next-6");
-    await userEvent.click(screen.getByRole("button", { name: /明日の調査メモを残す。作成/ }));
+    await userEvent.click(screen.getByRole("option", { name: /明日の調査メモを残す。作成/ }));
     const detail = document.querySelector("[data-selected-readout='task-next-6']") as HTMLElement;
     await userEvent.click(within(detail).getByRole("button", { name: "削除" }));
     expect(screen.getByText("「明日の調査メモを残す」を削除します")).toBeInTheDocument();
@@ -575,7 +586,7 @@ describe("history-left / NOW-right surface", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /明日の調査メモを残すの完了履歴/ })).toBeInTheDocument());
     await waitFor(() => expect(document.activeElement).toBe(pocketFor("task-next-6").querySelector(".pocket-caption")));
     await expandPocket("task-next-6");
-    await userEvent.click(screen.getByRole("button", { name: /明日の調査メモを残す。作成/ }));
+    await userEvent.click(screen.getByRole("option", { name: /明日の調査メモを残す。作成/ }));
     expect(screen.getByText("明日の調査メモを残す", { selector: "[data-selected-readout] strong" })).toBeInTheDocument();
     const completed = screen.getByRole("button", { name: "明日の調査メモを残すをNOWへ戻す" });
     await userEvent.click(completed);
@@ -1011,7 +1022,7 @@ describe("history-left / NOW-right surface", () => {
     await expandPocket("task-completed");
     await userEvent.click(timelineCell("task-completed"));
     await userEvent.click(historyJump);
-    expect(scroll.mock.instances.at(-1)).toHaveAttribute("id", "history-mark-task-completed");
+    expect(scroll.mock.instances.at(-1)).toHaveAttribute("id", "history-member-row-task-completed");
   });
 
   it("disables counted jumps when their surface has no matching entries", async () => {
@@ -1052,6 +1063,7 @@ describe("history-left / NOW-right surface", () => {
     await screen.findByText("親タスク", { selector: ".task-title" });
 
     const parent = rowFor("親タスク");
+    await userEvent.click(timelineCell("preview-created-1"));
     await userEvent.click(within(parent).getByRole("button", { name: "＋子" }));
     await userEvent.type(within(parent).getByRole("textbox", { name: "親タスクのサブタスク" }), "子タスク ");
     await userEvent.click(within(parent).getByRole("button", { name: "追加" }));
@@ -1125,7 +1137,7 @@ describe("history-left / NOW-right surface", () => {
     expect(detail).toBeInTheDocument();
     expect(detail.closest(".pocket-branch")).toBeInTheDocument();
     expect(detail.closest(".history-detail-row")).toHaveClass("history-detail-row-local");
-    expect(detail.closest(".history-detail-row")?.previousElementSibling).toHaveAttribute("data-row-id", "pocket:task-completed");
+    expect(detail.closest(".completed-detail-anchor")?.previousElementSibling).toHaveAttribute("data-row-id", "pocket:task-completed");
     expect(within(detail).getByText(/作成 .* → 完了 /)).toBeInTheDocument();
     expect(within(detail).getByRole("button", { name: "ログのタイムアウト境界を確認をNOWへ戻す" })).toBeInTheDocument();
     expect(within(detail).queryByRole("button", { name: "配置" })).not.toBeInTheDocument();
@@ -1148,7 +1160,7 @@ describe("history-left / NOW-right surface", () => {
     expect(document.querySelector("[data-selected-readout='task-completed']")).toBeNull();
     const detail = document.querySelector("[data-selected-readout='task-no-session']") as HTMLElement;
     expect(detail.closest(".pocket-branch")).toHaveAttribute("data-task-id", "task-no-session");
-    expect(detail.querySelector(".history-detail-path")).toBeNull();
+    expect(detail.querySelector(".history-detail-path")).toHaveTextContent("階層 調査メモの表記を確認（記録なし完了）");
   });
 
   it("keeps completed detail delete confirmation in its existing local flow", async () => {
@@ -1160,7 +1172,7 @@ describe("history-left / NOW-right surface", () => {
     await userEvent.click(within(detail).getByRole("button", { name: "削除" }));
     const confirmation = document.querySelector("[data-delete-confirm='task-completed']") as HTMLElement;
     expect(confirmation).toHaveClass("delete-confirm-completed");
-    expect(getComputedStyle(confirmation).position).toBe("relative");
+    expect(getComputedStyle(confirmation).position).toBe("absolute");
     expect(confirmation.previousElementSibling).toBe(detail.closest(".history-detail-row"));
   });
 
@@ -1260,6 +1272,7 @@ describe("history-left / NOW-right surface", () => {
     render(<App api={api} />);
     await ready();
 
+    await userEvent.click(timelineCell("task-next-1"));
     const remainingAction = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
     expect(rowFor("再現条件をテストケースにする").querySelector("[data-memo-presence='present']")).toBeInTheDocument();
     await userEvent.click(remainingAction);
@@ -1281,6 +1294,7 @@ describe("history-left / NOW-right surface", () => {
     const api = renderPreview("typical");
     const update = vi.spyOn(api, "updateTaskMemo");
     await ready();
+    await userEvent.click(timelineCell("task-next-1"));
     const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
     await userEvent.click(origin);
     const textarea = screen.getByRole("textbox", { name: "メモ本文" });
@@ -1306,6 +1320,7 @@ describe("history-left / NOW-right surface", () => {
     const api = renderPreview("typical");
     const update = vi.spyOn(api, "updateTaskMemo");
     await ready();
+    await userEvent.click(timelineCell("task-next-1"));
     const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
     await userEvent.click(origin);
     const textarea = screen.getByRole("textbox", { name: "メモ本文" });
@@ -1336,6 +1351,7 @@ describe("history-left / NOW-right surface", () => {
       void reject;
     }));
     await ready();
+    await userEvent.click(timelineCell("task-next-1"));
     const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
     await userEvent.click(origin);
     fireEvent.change(screen.getByRole("textbox", { name: "メモ本文" }), { target: { value: "pending memo" } });
@@ -1362,6 +1378,7 @@ describe("history-left / NOW-right surface", () => {
     const originalUpdate = api.updateTaskMemo.bind(api);
     const update = vi.spyOn(api, "updateTaskMemo").mockRejectedValueOnce({ code: "stale-version", message: "stale" }).mockImplementation(originalUpdate);
     await ready();
+    await userEvent.click(timelineCell("task-next-1"));
     const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
     await userEvent.click(origin);
     const textarea = screen.getByRole("textbox", { name: "メモ本文" });
@@ -1381,6 +1398,7 @@ describe("history-left / NOW-right surface", () => {
   it("keeps outside clicks inert, traps Tab, and returns focus on Cancel or Escape", async () => {
     renderPreview("typical");
     await ready();
+    await userEvent.click(timelineCell("task-next-1"));
     const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
     await userEvent.click(origin);
     const dialog = screen.getByRole("dialog");

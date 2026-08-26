@@ -1,4 +1,4 @@
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
 import packageMetadata from "../package.json";
 import { createFixtureTaskApi, previewVariantFromLocation, type PreviewVariant } from "./api/fixtureTaskApi";
 import { createFixtureUpdateApi } from "./api/fixtureUpdateApi";
@@ -16,6 +16,27 @@ import {
   type UndoStatus,
   normalizeDomainError,
 } from "./api/types";
+import {
+  projectTaskDetailDisclosure,
+  transitionTaskDetailDisclosure,
+  type TaskDetailDisclosureIntent,
+  type TaskDetailDisclosureState,
+} from "./taskDetailDisclosure";
+import {
+  currentKeyboardTaskPlacementCandidate,
+  initialKeyboardTaskPlacementState,
+  transitionKeyboardTaskPlacement,
+  type KeyboardTaskPlacementCandidate,
+  type KeyboardTaskPlacementEffect,
+  type KeyboardTaskPlacementState,
+} from "./keyboardTaskPlacement";
+import {
+  createCompletedPocketWindow,
+  projectCompletedPocketWindow,
+  transitionCompletedPocketWindow,
+  type CompletedPocketMember,
+  type CompletedPocketWindowState,
+} from "./completedPocketWindow";
 import { UpdateReceipt, type UpdateReceiptState } from "./UpdateReceipt";
 import "./index.css";
 
@@ -23,7 +44,6 @@ export type AppProps = { api?: TaskApi; updateApi?: UpdateApi; currentVersion?: 
 type CreateDraft = { parentTaskId: string; returnFocusId: string };
 type Placement = { parentTaskId?: string; beforeTaskId?: string; label: string };
 type DragState = { taskId: string; pointerId: number; placement?: Placement };
-type KeyboardMove = { taskId: string; destinations: Placement[]; index: number; returnFocusId: string };
 type DeleteConfirmation = { taskId: string; originFocusId: string; successFocusId: string };
 type RangePreset = "24h" | "7d" | "30d" | "90d" | "all";
 type RangeView = { preset: RangePreset; startMs: number; endMs: number; anchoredNow: boolean };
@@ -221,6 +241,7 @@ type HistoryMarkProps = {
   range: RangeView;
   nowMs: number;
   selected: boolean;
+  ancestryPath?: string;
   onSelect: (taskId: string) => void;
   onFit: (taskId: string) => void;
 };
@@ -240,11 +261,12 @@ function TimelineRuler({ range, nowMs, remainingCount, completedCount, onCurrent
   const rangeLabel = range.anchoredNow ? `表示範囲 開始 ${formatBounds(range.startMs)} 現在 ${formatBounds(range.endMs)}` : `表示範囲 開始 ${formatBounds(range.startMs)} 終了 ${formatBounds(range.endMs)}`;
   return <div className="history-ruler-grid timeline-ruler" data-range-start-ms={range.startMs} data-range-end-ms={range.endMs} data-now-ms={nowMs}>
     <div className="history-ruler-cell">
+      <span className="ruler-side-label" aria-hidden="true">過去 / 履歴</span>
       <div className="ruler-ticks" aria-hidden="true">{ticks.map((tick, index) => <span key={`${tick.left}-${index}`} className="ruler-tick" style={{ left: `${tick.left}%` }}>{tick.label}</span>)}</div>
       <div className="range-bounds" aria-label={rangeLabel}><span>開始 {formatBounds(range.startMs)}</span><span>{range.anchoredNow ? "現在" : "終了"} {formatBounds(range.endMs)}</span></div>
     </div>
     <div className={`now-hinge-header ${nowIsBeyondPlot ? "is-discontinuous" : ""}`} aria-label="NOW" />
-    <div className="identity-heading"><span className="sr-only">現在のタスク。操作は右側から</span><div className="ruler-jumps"><button type="button" className="ruler-jump" aria-label={`現在のタスク ${remainingCount} 件へ移動`} onClick={onCurrentJump} disabled={remainingCount === 0}><span aria-hidden="true">現在 {remainingCount}</span></button><button type="button" className="ruler-jump" aria-label={`完了履歴 ${completedCount} 件へ移動`} onClick={onHistoryJump} disabled={completedCount === 0}><span aria-hidden="true">履歴 {completedCount}</span></button></div></div>
+    <div className="identity-heading"><span className="identity-heading-title" aria-hidden="true">現在の仕事</span><span className="sr-only">現在のタスク。操作は右側から</span><div className="ruler-jumps"><button type="button" className="ruler-jump" aria-label={`現在のタスク ${remainingCount} 件へ移動`} onClick={onCurrentJump} disabled={remainingCount === 0}><span aria-hidden="true">現在 {remainingCount}</span></button><button type="button" className="ruler-jump" aria-label={`完了履歴 ${completedCount} 件へ移動`} onClick={onHistoryJump} disabled={completedCount === 0}><span aria-hidden="true">履歴 {completedCount}</span></button></div></div>
   </div>;
 }
 
@@ -265,7 +287,7 @@ const TopCreateForm = memo(function TopCreateForm({ disabled, onSubmit }: TopCre
 
   return <form className="top-create" onSubmit={submit}>
     <label htmlFor="top-task-title">新しいタスク</label>
-    <input id="top-task-title" value={title} onChange={(event) => setTitle(event.currentTarget.value)} placeholder="タスクを追加" maxLength={240} disabled={disabled} />
+    <input id="top-task-title" data-focus-id="top-task-title" value={title} onChange={(event) => setTitle(event.currentTarget.value)} placeholder="タスクを追加" maxLength={240} disabled={disabled} />
     <button type="submit" aria-label="トップレベルに追加" disabled={disabled || !title.trim()}>＋</button>
   </form>;
 });
@@ -296,7 +318,7 @@ const InlineSubtaskForm = memo(function InlineSubtaskForm({ parentTaskId, parent
   </form>;
 });
 
-function HistoryMark({ entry, range, nowMs, selected, onSelect, onFit }: HistoryMarkProps): ReactElement {
+function HistoryMark({ entry, range, nowMs, selected, ancestryPath, onSelect, onFit }: HistoryMarkProps): ReactElement {
   const geometry = lifetimeGeometry(entry, range.startMs, range.endMs, nowMs);
   const isRemainingTask = entry.task.state !== "completed";
   const endpointLabel = isRemainingTask ? `NOW ${formatExact(nowMs)}` : entry.task.completedAt ? `完了 ${formatExact(entry.task.completedAt)}` : "完了時刻なし";
@@ -313,6 +335,14 @@ function HistoryMark({ entry, range, nowMs, selected, onSelect, onFit }: History
       {clippingLabel && geometry.kind === "interval" && <span className="clip-label">{clippingLabel}</span>}
       {nowOutsideRight && geometry.kind === "interval" && <span className="history-continuation">▷ 継続</span>}
     </div>
+    {selected && ancestryPath && <span className="selected-ancestry-readout" data-ancestry-path={entry.task.id} tabIndex={0} title={ancestryPath} aria-label={`祖先を含む階層: ${ancestryPath}`}>階層 {ancestryPath}</span>}
+    {selected && <span className="selected-lifetime-readout" data-lifetime-readout={entry.task.id}>
+      {isRemainingTask
+        ? `作成 ${formatExact(entry.task.createdAt)} → NOW ${formatExact(nowMs)}`
+        : entry.task.completedAt
+          ? `作成 ${formatExact(entry.task.createdAt)} → 完了 ${formatExact(entry.task.completedAt)}`
+          : `作成 ${formatExact(entry.task.createdAt)} → 完了時刻なし`}
+    </span>}
     <span className="sr-only" id={`lifetime-description-${entry.task.id}`}>{accessible}</span>
   </div>;
 }
@@ -323,36 +353,88 @@ type HistoryPocketProps = {
   range: RangeView;
   nowMs: number;
   expanded: boolean;
+  windowState: CompletedPocketWindowState;
   selectedTaskId: string | null;
   onSelect: (taskId: string) => void;
   onToggle: (taskId: string) => void;
+  onLoadMore: () => void;
 };
 
-function HistoryPocket({ root, members, range, nowMs, expanded, selectedTaskId, onSelect, onToggle }: HistoryPocketProps): ReactElement {
+const COMPLETED_DISTRIBUTION_BUCKETS = 12;
+
+function completedPocketDistribution(members: HierarchyEntry[], range: RangeView): number[] {
+  const buckets = Array.from({ length: COMPLETED_DISTRIBUTION_BUCKETS }, () => 0);
+  const span = Math.max(1, range.endMs - range.startMs);
+  for (const member of members) {
+    const createdMs = Date.parse(member.task.createdAt);
+    const completedMs = member.task.completedAt ? Date.parse(member.task.completedAt) : createdMs;
+    const timestamp = Number.isFinite(completedMs) ? completedMs : createdMs;
+    const clamped = Math.min(range.endMs, Math.max(range.startMs, Number.isFinite(timestamp) ? timestamp : range.startMs));
+    const position = (clamped - range.startMs) / span;
+    const index = Math.min(COMPLETED_DISTRIBUTION_BUCKETS - 1, Math.max(0, Math.floor(position * COMPLETED_DISTRIBUTION_BUCKETS)));
+    buckets[index] += 1;
+  }
+  return buckets;
+}
+
+function HistoryPocket({ root, members, range, nowMs, expanded, windowState, selectedTaskId, onSelect, onToggle, onLoadMore }: HistoryPocketProps): ReactElement {
   const rootLabel = `${root.task.title}の完了履歴 ${members.length}件`;
   const lanesId = `history-pocket-lanes-${root.task.id}`;
+  const memberRecords = members.map((entry) => ({ id: entry.task.id, entry }));
+  const projection = projectCompletedPocketWindow(memberRecords, windowState, selectedTaskId ?? undefined);
+  const activeMemberId = projection.rendered.some(({ member }) => member.id === selectedTaskId) ? `history-member-row-${selectedTaskId}` : undefined;
+  const distribution = completedPocketDistribution(members, range);
+  const distributionPeak = Math.max(1, ...distribution);
   return <div className={`history-pocket ${expanded ? "is-expanded" : ""} ${members.some((entry) => entry.task.id === selectedTaskId) ? "is-selected" : ""}`} data-pocket-id={root.task.id}>
-    <button id={`history-pocket-caption-${root.task.id}`} data-focus-id={`history-pocket-caption:${root.task.id}`} type="button" className="pocket-caption" tabIndex={-1} onMouseDown={(event) => event.preventDefault()} onClick={() => onToggle(root.task.id)} aria-label={`${rootLabel}${expanded ? "を折りたたむ" : "を展開"}`} aria-expanded={expanded} aria-controls={expanded ? lanesId : undefined}>
+    <button id={`history-pocket-caption-${root.task.id}`} data-focus-id={`history-pocket-caption:${root.task.id}`} type="button" className="pocket-caption" tabIndex={-1} onMouseDown={(event) => event.preventDefault()} onClick={() => onToggle(root.task.id)} aria-label={`${rootLabel}。${expanded ? `表示 ${projection.visiblePrefixCount}件。折りたたむ` : "期間分布を確認。展開"}`} aria-expanded={expanded} aria-controls={expanded ? lanesId : undefined}>
       <span className="pocket-caption-chevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
       <span className="pocket-caption-title">{root.task.title}</span>
       <span className="pocket-caption-count">{members.length}件</span>
     </button>
+    {!expanded && <div className="pocket-summary" role="img" aria-label={`${rootLabel}の期間分布`}>
+      <span className="pocket-summary-kicker" aria-hidden="true">分布</span>
+      <span className="pocket-summary-rail" aria-hidden="true">{distribution.map((count, index) => <span key={index} className="pocket-summary-bucket" data-bucket-count={count} style={{ left: `${(index / COMPLETED_DISTRIBUTION_BUCKETS) * 100}%`, height: `${Math.max(3, (count / distributionPeak) * 100)}%` }} />)}</span>
+    </div>}
     {expanded && (
-      <div id={lanesId} className="pocket-lanes" aria-label={rootLabel}>
-        {members.map((entry) => {
+      <div id={lanesId} className="pocket-lanes" role="listbox" aria-label={rootLabel} aria-activedescendant={activeMemberId}>
+        {projection.rendered.map(({ member, positionInSet, setSize, inclusion }) => {
+          const entry = member.entry;
           const geometry = lifetimeGeometry(entry, range.startMs, range.endMs, nowMs);
           const position = geometry.kind === "before" ? 0 : geometry.kind === "after" ? 98 : geometry.left ?? 0;
           const width = geometry.kind === "interval" ? geometry.width ?? 0 : 0;
           const relativeDepth = Math.max(0, entry.depth - root.depth);
           const titleLeft = geometry.kind === "interval" ? Math.min(66, position + width + 2) : 4;
           const markerLabel = `${entry.task.title}。${timelineDescription(entry, nowMs)}`;
-          return <div key={entry.task.id} className={`pocket-member-row ${selectedTaskId === entry.task.id ? "is-selected" : ""}`} data-history-member-id={entry.task.id} data-depth={entry.depth}>
-            <div className="pocket-member-track" role="group" aria-label={markerLabel}>
-              <button id={`history-mark-${entry.task.id}`} type="button" className={`pocket-mark ${selectedTaskId === entry.task.id ? "is-selected" : ""} ${geometry.kind !== "interval" ? `is-${geometry.kind}` : ""} ${geometry.kind === "point" ? "is-closed" : ""} ${geometry.missingEnd ? "is-warning" : ""}`} data-history-mark={entry.task.id} data-timeline-cell={entry.task.id} data-start-ms={Date.parse(entry.task.createdAt)} data-end-ms={entry.task.completedAt ? Date.parse(entry.task.completedAt) : "missing"} aria-label={markerLabel} tabIndex={-1} style={{ left: `${position}%`, ...(geometry.kind === "interval" ? { width: `${width}%` } : {}) }} onMouseDown={(event) => event.preventDefault()} onClick={() => onSelect(entry.task.id)}>{geometry.kind === "before" ? "◁" : geometry.kind === "after" ? "▷" : geometry.missingEnd ? "△" : geometry.kind === "point" ? "■" : "■"}</button>
-              <button type="button" className="pocket-member-title" aria-label={`${entry.task.title}を選択`} tabIndex={-1} style={{ left: `${titleLeft}%`, paddingLeft: `${Math.min(relativeDepth, 8) * 10}px` }} onMouseDown={(event) => event.preventDefault()} onClick={() => onSelect(entry.task.id)}><span className="pocket-member-branch" aria-hidden="true">{relativeDepth > 0 ? "└" : "•"}</span>{entry.task.title}</button>
+          return <div
+            key={entry.task.id}
+            id={`history-member-row-${entry.task.id}`}
+            className={`pocket-member-row ${selectedTaskId === entry.task.id ? "is-selected" : ""}`}
+            data-history-member-id={entry.task.id}
+            data-pocket-inclusion={inclusion}
+            data-depth={entry.depth}
+            role="option"
+            tabIndex={-1}
+            aria-label={markerLabel}
+            aria-selected={selectedTaskId === entry.task.id}
+            aria-posinset={positionInSet}
+            aria-setsize={setSize}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onSelect(entry.task.id)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onSelect(entry.task.id);
+            }}
+          >
+            <div className="pocket-member-track" aria-hidden="true">
+              <span id={`history-mark-${entry.task.id}`} className={`pocket-mark ${selectedTaskId === entry.task.id ? "is-selected" : ""} ${geometry.kind !== "interval" ? `is-${geometry.kind}` : ""} ${geometry.kind === "point" ? "is-closed" : ""} ${geometry.missingEnd ? "is-warning" : ""}`} data-history-mark={entry.task.id} data-timeline-cell={entry.task.id} data-start-ms={Date.parse(entry.task.createdAt)} data-end-ms={entry.task.completedAt ? Date.parse(entry.task.completedAt) : "missing"} style={{ left: `${position}%`, ...(geometry.kind === "interval" ? { width: `${width}%` } : {}) }}>{geometry.kind === "before" ? "◁" : geometry.kind === "after" ? "▷" : geometry.missingEnd ? "△" : geometry.kind === "point" ? "■" : "■"}</span>
+              <span className="pocket-member-title" style={{ left: `${titleLeft}%`, paddingLeft: `${Math.min(relativeDepth, 8) * 10}px` }}><span className="pocket-member-branch">{relativeDepth > 0 ? "└" : "•"}</span>{entry.task.title}</span>
             </div>
           </div>;
         })}
+        {projection.canLoadMore && <button type="button" className="pocket-more" onClick={onLoadMore} aria-label={`完了履歴をさらに${projection.nextBatchSize}件表示`}>さらに{projection.nextBatchSize}件表示</button>}
+        <span className="pocket-window-status" role="status" aria-live="polite">表示 {projection.visiblePrefixCount} / 総 {projection.rendered.length + projection.omittedCount}件{projection.omittedCount > 0 ? `（残り${projection.omittedCount}件は未表示）` : ""}</span>
       </div>
     )}
   </div>;
@@ -363,7 +445,11 @@ function isRemaining(entry: HierarchyEntry): boolean {
 }
 
 function boundedDepthOffset(depth: number): number {
-  return Math.min(Math.max(depth, 0), 8) * 12 + 8;
+  // Keep all nine supported depth cues distinct while reserving enough of the
+  // narrow identity plane for a selected title.  The branch elbow still grows
+  // through the same bounded CSS clamp, but remains subordinate to identity
+  // even at the narrowest supported viewport.
+  return Math.min(Math.max(depth, 0), 8) * 2 + 6;
 }
 
 function stateLabel(state: TaskSnapshot["state"]): string {
@@ -485,9 +571,9 @@ function containsRemainingDescendant(entries: HierarchyEntry[], taskId: string):
 
 function useFocusRestoration(focusId: string | null) {
   useEffect(() => {
-    if (!focusId) return;
+    if (!focusId || focusId.startsWith("drag-handle:")) return;
     const target = document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(focusId)}"]`);
-    target?.focus();
+    target?.focus({ preventScroll: true });
   }, [focusId]);
 }
 
@@ -632,8 +718,9 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
   const renameOutsideRequestRef = useRef<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [expandedPockets, setExpandedPockets] = useState<Set<string>>(() => new Set());
+  const [completedPocketWindows, setCompletedPocketWindows] = useState<Map<string, CompletedPocketWindowState>>(() => new Map());
   const [dragState, setDragState] = useState<DragState | null>(null);
-  const [keyboardMove, setKeyboardMove] = useState<KeyboardMove | null>(null);
+  const [keyboardPlacement, setKeyboardPlacement] = useState<KeyboardTaskPlacementState>(initialKeyboardTaskPlacementState);
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmation | null>(null);
   const [memoEditor, setMemoEditor] = useState<MemoEditorState | null>(null);
   const memoEditorRef = useRef<MemoEditorState | null>(null);
@@ -649,7 +736,7 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
   const initialNowMs = Date.parse(nowForApi(previewMode));
   const [displayNowMs, setDisplayNowMs] = useState(initialNowMs);
   const [rangeView, setRangeView] = useState<RangeView>(() => ({ preset: "24h", startMs: initialNowMs - RANGE_DURATIONS["24h"], endMs: initialNowMs, anchoredNow: true }));
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [disclosureState, setDisclosureState] = useState<TaskDetailDisclosureState>({});
   const [actualHistoryByTask, setActualHistoryByTask] = useState<Record<string, ActualHistoryLoadState>>({});
   const [forestLoadToken, setForestLoadToken] = useState(0);
   const actualHistoryCacheRef = useRef(new Map<string, ActualHistorySummary>());
@@ -737,22 +824,34 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     memoReturnFocusRef.current = null;
     document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(returnFocusId)}"]`)?.focus();
   }, [memoEditor]);
-  useEffect(() => {
-    if (keyboardMove) keyboardPlacementRef.current?.focus();
-  }, [keyboardMove]);
+  useLayoutEffect(() => {
+    if (keyboardPlacement.phase === "choosing" || keyboardPlacement.phase === "submitting") {
+      keyboardPlacementRef.current?.focus({ preventScroll: true });
+    }
+  }, [keyboardPlacement.phase]);
 
   useEffect(() => {
     if (!deleteConfirm) return;
     // Confirmation is deliberately non-destructive on entry.  Keeping focus
     // on the stable cancel action also makes Esc and screen-reader recovery
     // predictable while the inline scope is open.
-    document.querySelector<HTMLElement>(`[data-focus-id="delete-cancel:${CSS.escape(deleteConfirm.taskId)}"]`)?.focus();
+    document.querySelector<HTMLElement>(`[data-focus-id="delete-cancel:${CSS.escape(deleteConfirm.taskId)}"]`)?.focus({ preventScroll: true });
   }, [deleteConfirm]);
 
-  useEffect(() => {
-    if (keyboardMove || !focusReturnId) return;
-    document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(focusReturnId)}"]`)?.focus();
-  }, [focusReturnId, keyboardMove]);
+  useLayoutEffect(() => {
+    if (
+      (keyboardPlacement.phase !== "idle" && keyboardPlacement.phase !== "failed") ||
+      !focusReturnId?.startsWith("drag-handle:")
+      || pending !== null
+      || pendingRef.current !== null
+      || loading
+      || refreshing
+    ) return;
+    const target = document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(focusReturnId)}"]`);
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    setFocusReturnId((current) => current === focusReturnId ? null : current);
+  }, [focusReturnId, keyboardPlacement.phase, loading, pending, refreshing, forest]);
 
   useEffect(() => {
     if (previewMode) return;
@@ -762,12 +861,38 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
 
   const entries = forest?.entries ?? [];
   const byId = useMemo(() => parentMap(entries), [entries]);
+  const availableTaskIds = useMemo<ReadonlySet<string>>(() => new Set(entries.map((entry) => entry.task.id)), [entries]);
+  const selectedTaskId = disclosureState.selectedTaskId ?? null;
   const remainingEntries = useMemo(() => entries.filter(isRemaining), [entries]);
   const completedEntries = useMemo(() => entries.filter((entry) => !isRemaining(entry)), [entries]);
   const remainingCount = remainingEntries.length;
   const selectedEntry = selectedTaskId ? byId.get(selectedTaskId) : undefined;
   const completedOnlyIds = useMemo(() => new Set(completedEntries.filter((entry) => !containsRemainingDescendant(entries, entry.task.id)).map((entry) => entry.task.id)), [completedEntries, entries]);
   const completedPocketRoots = useMemo(() => completedEntries.filter((entry) => completedOnlyIds.has(entry.task.id) && (!entry.parentTaskId || !completedOnlyIds.has(entry.parentTaskId))), [completedEntries, completedOnlyIds]);
+  const membersForPocket = useCallback((rootTaskId: string): HierarchyEntry[] => {
+    const root = completedPocketRoots.find((candidate) => candidate.task.id === rootTaskId);
+    return root ? [root, ...descendantsOf(entries, root.task.id).filter((candidate) => completedOnlyIds.has(candidate.task.id))] : [];
+  }, [completedOnlyIds, completedPocketRoots, entries]);
+
+  useEffect(() => {
+    setCompletedPocketWindows((current) => {
+      const next = new Map<string, CompletedPocketWindowState>();
+      let changed = current.size !== completedPocketRoots.length;
+      for (const root of completedPocketRoots) {
+        const members = membersForPocket(root.task.id);
+        const existing = current.get(root.task.id);
+        if (!existing) {
+          changed = true;
+          continue;
+        }
+        const reconciled = transitionCompletedPocketWindow(existing, { type: "reconcile" }, members.length);
+        next.set(root.task.id, reconciled);
+        changed = changed || reconciled !== existing;
+      }
+      if (!changed) return current;
+      return next;
+    });
+  }, [completedPocketRoots, membersForPocket]);
   const selectedCompletedPocket = useMemo(() => {
     if (!selectedEntry || isRemaining(selectedEntry)) return undefined;
     return completedPocketRoots.find((candidate) => candidate.task.id === selectedEntry.task.id || descendantsOf(entries, candidate.task.id).some((entry) => entry.task.id === selectedEntry.task.id));
@@ -776,12 +901,24 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     ? selectedEntry && isRemaining(selectedEntry)
       ? `history-task-${selectedTaskId}`
       : selectedCompletedPocket
-        ? expandedPockets.has(selectedCompletedPocket.task.id) ? `history-mark-${selectedTaskId}` : `history-pocket-caption-${selectedCompletedPocket.task.id}`
+        ? expandedPockets.has(selectedCompletedPocket.task.id) ? `history-member-row-${selectedTaskId}` : `history-pocket-caption-${selectedCompletedPocket.task.id}`
         : undefined
     : undefined;
   const selectedCompletedDetailId = selectedEntry && !isRemaining(selectedEntry) && selectedCompletedPocket && expandedPockets.has(selectedCompletedPocket.task.id)
     ? selectedEntry.task.id
     : null;
+
+  // The adapter is the only owner of stable disclosure state.  Expansion is
+  // still presentation-only and remains alongside the existing tree/pocket
+  // behavior; it is deliberately not folded into the capability state.
+  const applyDisclosureIntent = useCallback((intent: TaskDetailDisclosureIntent) => {
+    setDisclosureState((current) => transitionTaskDetailDisclosure(current, intent, availableTaskIds));
+  }, [availableTaskIds]);
+
+  useEffect(() => {
+    if (!forest) return;
+    setDisclosureState((current) => transitionTaskDetailDisclosure(current, { type: "reconcile" }, availableTaskIds));
+  }, [availableTaskIds, forest]);
 
   useEffect(() => {
     setRangeView((current) => {
@@ -794,9 +931,10 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     });
   }, [displayNowMs]);
 
-  const selectTask = useCallback((taskId: string) => {
+  const revealTask = useCallback((taskId: string, intentType: "select" | "focus") => {
+    applyDisclosureIntent({ type: intentType, taskId });
+    if (!availableTaskIds.has(taskId)) return;
     startTransition(() => {
-      setSelectedTaskId(taskId);
       setCollapsed((current) => {
         const next = new Set(current);
         let changed = false;
@@ -810,8 +948,16 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
       const pocket = completedPocketRoots.find((candidate) => candidate.task.id === taskId || descendantsOf(entries, candidate.task.id).some((entry) => entry.task.id === taskId));
       if (!pocket || expandedPockets.has(pocket.task.id) || pocket.task.id === taskId) return;
       setExpandedPockets((current) => new Set(current).add(pocket.task.id));
+      setCompletedPocketWindows((current) => {
+        if (current.has(pocket.task.id)) return current;
+        const next = new Map(current);
+        next.set(pocket.task.id, createCompletedPocketWindow(membersForPocket(pocket.task.id).length));
+        return next;
+      });
     });
-  }, [byId, completedPocketRoots, entries, expandedPockets]);
+  }, [applyDisclosureIntent, availableTaskIds, byId, completedPocketRoots, entries, expandedPockets, membersForPocket]);
+  const selectTask = useCallback((taskId: string) => revealTask(taskId, "select"), [revealTask]);
+  const focusTask = useCallback((taskId: string) => revealTask(taskId, "focus"), [revealTask]);
   const historyItemIds = useMemo(() => projectedForestOrder(entries), [entries]);
   const handleHistoryKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     if (historyItemIds.length === 0) return;
@@ -906,7 +1052,7 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
   const jumpHistory = useCallback(() => {
     const selectedCompleted = selectedEntry && !isRemaining(selectedEntry) ? selectedEntry.task.id : null;
     const target = selectedCompleted
-      ? document.getElementById(`history-mark-${selectedCompleted}`) ?? (selectedCompletedPocket ? document.getElementById(`history-pocket-caption-${selectedCompletedPocket.task.id}`) : null)
+      ? document.getElementById(`history-member-row-${selectedCompleted}`) ?? (selectedCompletedPocket ? document.getElementById(`history-pocket-caption-${selectedCompletedPocket.task.id}`) : null)
       : completedPocketRoots[0]
         ? document.querySelector<HTMLElement>(`[data-pocket-id="${CSS.escape(completedPocketRoots[0].task.id)}"]`)
         : null;
@@ -926,9 +1072,9 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     const minimumDuration = 60 * 60 * 1000;
     const startMs = Math.min(createdMs - padding, displayNowMs - minimumDuration);
     const endMs = Math.min(displayNowMs, Math.max(startMs + minimumDuration, isOpen ? displayNowMs : knownEnd + padding));
-    setSelectedTaskId(taskId);
+    selectTask(taskId);
     setRangeView({ preset: rangeView.preset, startMs, endMs, anchoredNow: false });
-  }, [byId, displayNowMs, rangeView.preset]);
+  }, [byId, displayNowMs, rangeView.preset, selectTask]);
 
   const invalidateActualHistory = useCallback(() => {
     actualHistoryEpochRef.current += 1;
@@ -1159,14 +1305,14 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
       const result = await action();
       invalidateActualHistory();
       setNotice(success);
-      onSuccess?.();
       await loadWorkspace(restoreFocusId);
+      onSuccess?.();
       return result;
     } catch (reason) {
       const error = normalizeDomainError(reason);
       setActionError(error);
-      onError?.(error);
       if (error.code === "stale-hierarchy" || error.code === "version-conflict" || error.code === "stale-version" || error.code === "stale-undo" || error.code === "undo-not-available" || error.code === "undo-conflict") await loadWorkspace(restoreFocusId);
+      onError?.(error);
       return undefined;
     } finally {
       pendingRef.current = null;
@@ -1256,7 +1402,7 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
       () => api.completeHierarchyTask(entry.task.id, entry.task.version, nowForApi(previewMode)),
       "完了にしました",
       `history-pocket-caption:${entry.task.id}`,
-      () => setSelectedTaskId(entry.task.id),
+      () => selectTask(entry.task.id),
       (error) => {
         if (error.code !== "incomplete-descendants") return;
         const firstRemaining = descendantsOf(entries, entry.task.id).find(isRemaining);
@@ -1270,23 +1416,55 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
         setFocusReturnId(`complete:${firstRemaining.task.id}`);
       },
     );
-  }, [api, applyMutation, byId, entries, previewMode]);
+  }, [api, applyMutation, byId, entries, previewMode, selectTask]);
 
   const reopen = useCallback(async (entry: HierarchyEntry) => {
     await applyMutation(`reopen:${entry.task.id}`, () => api.reopenHierarchyTask(entry.task.id, entry.task.version, nowForApi(previewMode)), "NOWへ戻しました", `complete:${entry.task.id}`);
   }, [api, applyMutation, previewMode]);
 
   const deleteReturnFocusId = useCallback((entry: HierarchyEntry): string => {
-    const siblings = projectedChildrenOf(entries, entry.parentTaskId);
-    const index = siblings.findIndex((candidate) => candidate.task.id === entry.task.id);
-    const next = siblings[index + 1] ?? siblings[index - 1];
-    if (next) return isRemaining(next) ? `title:${next.task.id}` : `history-mark-${next.task.id}`;
-    if (entry.parentTaskId) {
-      const parent = byId.get(entry.parentTaskId);
-      if (parent) return isRemaining(parent) ? `title:${parent.task.id}` : `history-mark-${parent.task.id}`;
+    const deletedIds = new Set([entry, ...descendantsOf(entries, entry.task.id)].map((candidate) => candidate.task.id));
+    const pocketRootByTaskId = new Map<string, HierarchyEntry>();
+    for (const pocketRoot of completedPocketRoots) {
+      for (const member of membersForPocket(pocketRoot.task.id)) pocketRootByTaskId.set(member.task.id, pocketRoot);
+    }
+
+    const isTreeVisible = (candidate: HierarchyEntry): boolean => {
+      let parentId = candidate.parentTaskId;
+      while (parentId) {
+        if (collapsed.has(parentId)) return false;
+        parentId = byId.get(parentId)?.parentTaskId;
+      }
+      return true;
+    };
+
+    const focusForCandidate = (candidate: HierarchyEntry): string | null => {
+      if (deletedIds.has(candidate.task.id)) return null;
+      if (isRemaining(candidate)) return isTreeVisible(candidate) ? `title:${candidate.task.id}` : null;
+      const pocketRoot = pocketRootByTaskId.get(candidate.task.id);
+      if (!pocketRoot || deletedIds.has(pocketRoot.task.id) || !isTreeVisible(pocketRoot)) return null;
+      return `history-pocket-caption:${pocketRoot.task.id}`;
+    };
+
+    const entryPocketRoot = !isRemaining(entry) ? pocketRootByTaskId.get(entry.task.id) : undefined;
+    // A completed member is represented by a single stable pocket caption;
+    // its individual mark may be outside the 40-item window or be removed
+    // together with a descendant subtree.
+    if (entryPocketRoot && entryPocketRoot.task.id !== entry.task.id) return `history-pocket-caption:${entryPocketRoot.task.id}`;
+
+    const entryIndex = entries.findIndex((candidate) => candidate.task.id === entry.task.id);
+    if (entryIndex >= 0) {
+      for (let index = entryIndex + 1; index < entries.length; index += 1) {
+        const focusId = focusForCandidate(entries[index]);
+        if (focusId) return focusId;
+      }
+      for (let index = entryIndex - 1; index >= 0; index -= 1) {
+        const focusId = focusForCandidate(entries[index]);
+        if (focusId) return focusId;
+      }
     }
     return "top-task-title";
-  }, [byId, entries]);
+  }, [byId, collapsed, completedPocketRoots, entries, membersForPocket]);
 
   const beginDelete = useCallback((entry: HierarchyEntry) => {
     if (pending || forest?.truncated) return;
@@ -1316,9 +1494,17 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     );
     if (result) {
       setDeleteConfirm(null);
-      if (selectedTaskId === entry.task.id || descendantsOf(entries, entry.task.id).some((candidate) => candidate.task.id === selectedTaskId)) setSelectedTaskId(null);
+      if (selectedTaskId === entry.task.id || descendantsOf(entries, entry.task.id).some((candidate) => candidate.task.id === selectedTaskId)) {
+        applyDisclosureIntent({ type: "reset" });
+      }
+    } else {
+      // A persistence failure leaves the last committed forest in place. Close
+      // the transient confirmation and return to its stable origin so the
+      // error readout cannot strand focus in a removed overlay.
+      setDeleteConfirm(null);
+      setFocusReturnId(deleteConfirm.originFocusId);
     }
-  }, [api, applyMutation, byId, deleteConfirm, entries, forest, pending, previewMode, selectedTaskId]);
+  }, [api, applyMutation, applyDisclosureIntent, byId, deleteConfirm, entries, forest, pending, previewMode, selectedTaskId]);
 
   const undo = useCallback(async () => {
     if (!undoStatus?.available || !undoStatus.operationToken || pending) return;
@@ -1464,47 +1650,171 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     if (sourceId) setFocusReturnId(`drag-handle:${sourceId}`);
   }, [dragState, stopAutoScroll]);
 
-  const destinationsFor = useCallback((sourceId: string): Placement[] => {
-    const source = byId.get(sourceId);
-    const destinations: Placement[] = [{ label: "最上位の末尾", parentTaskId: undefined }];
+  const destinationsFor = useCallback((sourceId: string): KeyboardTaskPlacementCandidate[] => {
+    const candidates: KeyboardTaskPlacementCandidate[] = [];
+    const add = (id: string, placement: Placement) => {
+      const validation = validatePlacement(sourceId, placement);
+      candidates.push({
+        id,
+        targetParentId: placement.parentTaskId,
+        beforeTaskId: placement.beforeTaskId,
+        valid: validation.valid,
+        reason: validation.valid ? undefined : validation.reason ?? "移動先が不正です",
+        // The label is presentation-only metadata retained by the adapter.
+        ...(placement.label ? { label: placement.label } : {}),
+      } as KeyboardTaskPlacementCandidate);
+    };
+
+    const firstCompletedAtRoot = firstCompletedSiblingOf(entries);
+    add(
+      `root:${firstCompletedAtRoot?.task.id ?? "append"}`,
+      firstCompletedAtRoot
+        ? { label: "最上位の末尾（完了履歴の前）", beforeTaskId: firstCompletedAtRoot.task.id }
+        : { label: "最上位の末尾" },
+    );
+
     for (const entry of entries) {
-      if (entry.task.id === sourceId) continue;
-      destinations.push({ label: `${pathLabel(entry, byId)} の前`, parentTaskId: entry.parentTaskId, beforeTaskId: entry.task.id });
-      if (isRemaining(entry)) destinations.push({ label: `${pathLabel(entry, byId)} の子の末尾`, parentTaskId: entry.task.id });
+      if (!isRemaining(entry) || entry.task.id === sourceId) continue;
+      add(`before:${entry.task.id}`, { label: `${pathLabel(entry, byId)} の前`, parentTaskId: entry.parentTaskId, beforeTaskId: entry.task.id });
+      const firstCompleted = firstCompletedSiblingOf(entries, entry.task.id);
+      add(
+        `parent:${entry.task.id}:${firstCompleted?.task.id ?? "append"}`,
+        firstCompleted
+          ? {
+          label: `${pathLabel(entry, byId)} の子の末尾（完了履歴の前）`,
+          parentTaskId: entry.task.id,
+          beforeTaskId: firstCompleted.task.id,
+            }
+          : { label: `${pathLabel(entry, byId)} の子の末尾`, parentTaskId: entry.task.id },
+      );
     }
-    return destinations;
+    return candidates;
   }, [byId, entries, validatePlacement]);
+
+  const submitKeyboardPlacement = useCallback(async (placement: { sourceTaskId: string; targetParentId?: string; beforeTaskId?: string }) => {
+    const returnFocusId = `drag-handle:${placement.sourceTaskId}`;
+    const asPlacement: Placement = {
+      label: "選択した移動先",
+      parentTaskId: placement.targetParentId,
+      beforeTaskId: placement.beforeTaskId,
+    };
+    if (!forest || forest.truncated) {
+      setKeyboardPlacement((current) => transitionKeyboardTaskPlacement(current, { type: "failure", failure: { message: "一覧が完全に読み込まれていないため移動できません" } }).state);
+      setFocusReturnId(returnFocusId);
+      return;
+    }
+    const validation = validatePlacement(placement.sourceTaskId, asPlacement);
+    if (!validation.valid) {
+      setKeyboardPlacement((current) => transitionKeyboardTaskPlacement(current, { type: "failure", failure: { message: validation.reason ?? "移動先が不正です" } }).state);
+      setFocusReturnId(returnFocusId);
+      return;
+    }
+    if (validation.noOp) {
+      setKeyboardPlacement((current) => transitionKeyboardTaskPlacement(current, { type: "success" }).state);
+      setFocusReturnId(returnFocusId);
+      return;
+    }
+    await applyMutation(
+      `move:${placement.sourceTaskId}`,
+      () => api.moveTaskInHierarchy(placement.sourceTaskId, placement.targetParentId, placement.beforeTaskId, forest.hierarchyRevision, nowForApi(previewMode)),
+      "タスクを移動しました",
+      returnFocusId,
+      () => {
+        setKeyboardPlacement((current) => transitionKeyboardTaskPlacement(current, { type: "success" }).state);
+        setFocusReturnId(returnFocusId);
+      },
+      (error) => {
+        setKeyboardPlacement((current) => transitionKeyboardTaskPlacement(current, { type: "failure", failure: { message: error.message } }).state);
+        setFocusReturnId(returnFocusId);
+      },
+    );
+  }, [api, applyMutation, forest, previewMode, validatePlacement]);
+
+  const dispatchKeyboardPlacement = useCallback((intent: Parameters<typeof transitionKeyboardTaskPlacement>[1]) => {
+    const transition = transitionKeyboardTaskPlacement(keyboardPlacement, intent);
+    setKeyboardPlacement(transition.state);
+    const effect: KeyboardTaskPlacementEffect | undefined = transition.effect;
+    if (effect?.type === "focus-return") setFocusReturnId(effect.returnFocusId);
+    if (effect?.type === "submit-placement") void submitKeyboardPlacement(effect.placement);
+  }, [keyboardPlacement, submitKeyboardPlacement]);
 
   const beginKeyboardMove = useCallback((entry: HierarchyEntry) => {
     const destinations = destinationsFor(entry.task.id);
-    setKeyboardMove({ taskId: entry.task.id, destinations, index: 0, returnFocusId: `move:${entry.task.id}` });
     clearFeedback();
+    setFocusReturnId(null);
+    setKeyboardPlacement(transitionKeyboardTaskPlacement(initialKeyboardTaskPlacementState, {
+      type: "begin",
+      sourceTaskId: entry.task.id,
+      candidates: destinations,
+      returnFocusId: `drag-handle:${entry.task.id}`,
+    }).state);
   }, [clearFeedback, destinationsFor]);
 
-  const cancelKeyboardMove = useCallback(() => {
-    const returnFocusId = keyboardMove?.returnFocusId;
-    setKeyboardMove(null);
-    setFocusReturnId(returnFocusId ?? null);
-  }, [keyboardMove]);
-
   const handleKeyboardMoveKeys = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
-    if (!keyboardMove) return;
-    if (event.key === "Escape") { event.preventDefault(); cancelKeyboardMove(); return; }
-    if (event.key === "ArrowDown" || event.key === "ArrowRight") { event.preventDefault(); setKeyboardMove((current) => current ? { ...current, index: Math.min(current.destinations.length - 1, current.index + 1) } : current); return; }
-    if (event.key === "ArrowUp" || event.key === "ArrowLeft") { event.preventDefault(); setKeyboardMove((current) => current ? { ...current, index: Math.max(0, current.index - 1) } : current); return; }
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const destination = keyboardMove.destinations[keyboardMove.index];
-      if (!destination) return;
-      const validation = validatePlacement(keyboardMove.taskId, destination);
-      if (!validation.valid) {
-        setActionError({ code: "invalid-placement", message: validation.reason ?? "移動先が不正です" });
-        return;
-      }
-      setKeyboardMove(null);
-      void commitMove(keyboardMove.taskId, destination, keyboardMove.returnFocusId);
-    }
-  }, [cancelKeyboardMove, commitMove, keyboardMove, validatePlacement]);
+    if (keyboardPlacement.phase === "idle") return;
+    if (event.key === "Escape") { event.preventDefault(); dispatchKeyboardPlacement({ type: "cancel" }); return; }
+    if (event.key === "ArrowDown" || event.key === "ArrowRight") { event.preventDefault(); dispatchKeyboardPlacement({ type: "navigate", direction: "next" }); return; }
+    if (event.key === "ArrowUp" || event.key === "ArrowLeft") { event.preventDefault(); dispatchKeyboardPlacement({ type: "navigate", direction: "previous" }); return; }
+    if (event.key === "Enter") { event.preventDefault(); dispatchKeyboardPlacement({ type: "confirm" }); }
+  }, [dispatchKeyboardPlacement, keyboardPlacement.phase]);
+
+  const keyboardCandidateLabel = useCallback((candidate: KeyboardTaskPlacementCandidate): string => {
+    const label = (candidate as KeyboardTaskPlacementCandidate & { label?: string }).label;
+    if (label) return label;
+    const anchor = candidate.beforeTaskId ? byId.get(candidate.beforeTaskId) : candidate.targetParentId ? byId.get(candidate.targetParentId) : undefined;
+    if (anchor) return `${pathLabel(anchor, byId)}${candidate.beforeTaskId ? " の前" : " の子の末尾"}`;
+    return candidate.beforeTaskId ? "選択した兄弟の前" : "最上位の末尾";
+  }, [byId]);
+
+  const renderKeyboardPlacement = (): ReactElement | null => {
+    if (keyboardPlacement.phase === "idle") return null;
+    const candidate = currentKeyboardTaskPlacementCandidate(keyboardPlacement);
+    const candidateIndex = keyboardPlacement.selectedIndex ?? 0;
+    const candidateId = candidate ? `keyboard-placement-option-${candidate.id}` : undefined;
+    const candidateLabel = candidate ? keyboardCandidateLabel(candidate) : "移動先なし";
+    return <section
+      className={`keyboard-placement is-${keyboardPlacement.phase}`}
+      data-keyboard-placement={keyboardPlacement.phase}
+      role="group"
+      aria-label="キーボードで移動先を選択"
+      onKeyDown={handleKeyboardMoveKeys}
+    >
+      <div className="placement-heading">
+        <strong>{keyboardPlacement.sourceTaskId ? `${byId.get(keyboardPlacement.sourceTaskId)?.task.title ?? keyboardPlacement.sourceTaskId}を移動` : "タスクを移動"}</strong>
+        <span>{keyboardPlacement.phase === "submitting" ? "送信中…" : keyboardPlacement.phase === "failed" ? "失敗。移動先を選び直せます" : "移動先を選択"}</span>
+      </div>
+      {keyboardPlacement.error && <p className="placement-error" role="alert">{keyboardPlacement.error.message}</p>}
+      <div className="placement-current" aria-live="polite">
+        <span className="placement-current-ordinal">候補 {keyboardPlacement.candidates.length > 0 ? `${candidateIndex + 1} / ${keyboardPlacement.candidates.length}` : "0 / 0"}</span>
+        <strong>{candidateLabel}</strong>
+        {candidate && !candidate.valid && <span className="placement-invalid-reason">⛔ {candidate.reason ?? keyboardPlacement.validationReason ?? "この移動先は選べません"}</span>}
+        {keyboardPlacement.validationReason && candidate?.valid !== false && <span className="placement-invalid-reason">⛔ {keyboardPlacement.validationReason}</span>}
+      </div>
+      <div ref={keyboardPlacementRef} className="placement-list" role="listbox" aria-label="移動先候補" aria-activedescendant={candidateId} tabIndex={-1}>
+        {keyboardPlacement.candidates.map((option, index) => <div
+          key={option.id}
+          id={`keyboard-placement-option-${option.id}`}
+          role="option"
+          aria-selected={index === candidateIndex}
+          aria-disabled={!option.valid}
+          className={`${index === candidateIndex ? "is-selected" : ""} ${option.valid ? "" : "is-invalid"}`}
+          data-placement-candidate-id={option.id}
+          data-placement-parent-id={option.targetParentId ?? ""}
+          data-placement-before-id={option.beforeTaskId ?? ""}
+        >
+          <span>{index + 1}. {keyboardCandidateLabel(option)}</span>
+          {!option.valid && <span>⛔ {option.reason ?? "選択できません"}</span>}
+        </div>)}
+      </div>
+      <div className="placement-actions">
+        <button type="button" data-placement-action="previous" onClick={() => dispatchKeyboardPlacement({ type: "navigate", direction: "previous" })} disabled={keyboardPlacement.phase === "submitting"}>前の候補</button>
+        <button type="button" data-placement-action="next" onClick={() => dispatchKeyboardPlacement({ type: "navigate", direction: "next" })} disabled={keyboardPlacement.phase === "submitting"}>次の候補</button>
+        <button type="button" data-placement-action="confirm" onClick={() => dispatchKeyboardPlacement({ type: "confirm" })} disabled={keyboardPlacement.phase === "submitting"}>決定</button>
+        <button type="button" data-placement-action="cancel" className="placement-cancel" onClick={() => dispatchKeyboardPlacement({ type: "cancel" })} disabled={keyboardPlacement.phase === "submitting"}>キャンセル</button>
+      </div>
+      <p className="placement-help">↑↓／←→で候補を移動、Enterで決定、Escで取消</p>
+    </section>;
+  };
 
   const handleMainKeyDown = useCallback((event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape" && deleteConfirm) { event.preventDefault(); cancelDelete(); return; }
@@ -1519,8 +1829,31 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
   const cancelCreateChild = useCallback(() => setCreateDraft(null), []);
 
   const togglePocket = useCallback((taskId: string) => {
-    setExpandedPockets((current) => { const next = new Set(current); if (next.has(taskId)) next.delete(taskId); else next.add(taskId); return next; });
-  }, []);
+    setExpandedPockets((current) => {
+      const next = new Set(current);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+    setCompletedPocketWindows((current) => {
+      if (current.has(taskId)) return current;
+      const next = new Map(current);
+      next.set(taskId, createCompletedPocketWindow(membersForPocket(taskId).length));
+      return next;
+    });
+  }, [membersForPocket]);
+
+  const loadMorePocket = useCallback((taskId: string) => {
+    const total = membersForPocket(taskId).length;
+    setCompletedPocketWindows((current) => {
+      const state = current.get(taskId) ?? createCompletedPocketWindow(total);
+      const nextState = transitionCompletedPocketWindow(state, { type: "load-more" }, total);
+      if (nextState === state) return current;
+      const next = new Map(current);
+      next.set(taskId, nextState);
+      return next;
+    });
+  }, [membersForPocket]);
 
   const renderCompletedDetail = (entry: HierarchyEntry): ReactElement => {
     const actualHistory = actualHistoryByTask[entry.task.id];
@@ -1531,10 +1864,11 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
         : actualHistory.summary.sessionCount === 0
           ? <span className="actual-history-status" data-actual-history-state="no-record"><strong>実作業時間</strong> 記録なし（セッション記録なし）</span>
           : <span className="actual-history-status" data-actual-history-state="ready" data-actual-duration-ms={actualHistory.summary.totalClosedDurationMs}><strong>実作業時間</strong> {formatActualDuration(actualHistory.summary.totalClosedDurationMs)}（記録済みセッション {actualHistory.summary.sessionCount}件）</span>;
-    return <div className="history-detail-row history-detail-row-local" data-local-detail-for={entry.task.id}>
+    return <div className="history-detail-row history-detail-row-local" data-local-detail-for={entry.task.id} data-completed-task-context={entry.task.id}>
       <div className="history-detail" aria-label={`${pathLabel(entry, byId)}の完了履歴詳細`} data-selected-readout={entry.task.id}>
         <div className="history-detail-summary">
           <strong>{entry.task.title}</strong>
+          <span className="history-detail-path" data-history-detail-path={entry.task.id} title={pathLabel(entry, byId)}>階層 {pathLabel(entry, byId)}</span>
           <span>{entry.task.completedAt ? `作成 ${formatExact(entry.task.createdAt)} → 完了 ${formatExact(entry.task.completedAt)}` : `作成 ${formatExact(entry.task.createdAt)} → 完了時刻なし`}</span>
           {actualWorkReadout}
         </div>
@@ -1581,34 +1915,46 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
   };
 
   const renderPocket = (entry: HierarchyEntry): ReactElement => {
-    const members = [entry, ...descendantsOf(entries, entry.task.id).filter((candidate) => completedOnlyIds.has(candidate.task.id))];
+    const members = membersForPocket(entry.task.id);
     const expanded = expandedPockets.has(entry.task.id);
     const selectedCompleted = selectedEntry && !isRemaining(selectedEntry) && members.some((member) => member.task.id === selectedEntry.task.id) ? selectedEntry : null;
     const firstCompleted = firstCompletedSiblingOf(entries, entry.parentTaskId);
     const depthOffset = boundedDepthOffset(entry.depth);
     const depthStyle = { "--depth": entry.depth, "--depth-offset": `${depthOffset}px` } as CSSProperties;
-    return <div key={`pocket:${entry.task.id}`} className={`tree-branch pocket-branch depth-${entry.depth}`} data-task-id={entry.task.id} data-depth={entry.depth} style={depthStyle} role="treeitem" aria-level={entry.depth + 1} aria-label={`${entry.task.title}の完了履歴 ${members.length}件`} aria-expanded={expanded} onFocusCapture={() => selectTask(entry.task.id)}>
+    return <div key={`pocket:${entry.task.id}`} className={`tree-branch pocket-branch depth-${entry.depth}`} data-task-id={entry.task.id} data-depth={entry.depth} style={depthStyle} role="treeitem" aria-level={entry.depth + 1} aria-label={`${entry.task.title}の完了履歴 ${members.length}件`} aria-expanded={expanded} onFocusCapture={(event) => {
+      const target = event.target as HTMLElement;
+      const taskContext = target.closest<HTMLElement>("[data-completed-task-context]")?.getAttribute("data-completed-task-context");
+      const detailId = target.closest<HTMLElement>("[data-selected-readout]")?.getAttribute("data-selected-readout");
+      const markId = target.closest<HTMLElement>("[data-history-mark]")?.getAttribute("data-history-mark");
+      const memberId = target.closest<HTMLElement>("[data-history-member-id]")?.getAttribute("data-history-member-id");
+      focusTask(taskContext ?? detailId ?? markId ?? memberId ?? entry.task.id);
+    }}>
       {firstCompleted?.task.id === entry.task.id && renderCompletedBoundarySeam(firstCompleted)}
       <div className="history-row pocket-row" data-row-id={`pocket:${entry.task.id}`}>
-        <HistoryPocket root={entry} members={members} range={rangeView} nowMs={displayNowMs} expanded={expanded} selectedTaskId={selectedTaskId} onSelect={selectTask} onToggle={togglePocket} />
+        <HistoryPocket root={entry} members={members} range={rangeView} nowMs={displayNowMs} expanded={expanded} windowState={completedPocketWindows.get(entry.task.id) ?? createCompletedPocketWindow(members.length)} selectedTaskId={selectedTaskId} onSelect={selectTask} onToggle={togglePocket} onLoadMore={() => loadMorePocket(entry.task.id)} />
         <div className="now-hinge-cell" aria-hidden="true" />
         <div className="pocket-right-spacer" aria-hidden="true" />
       </div>
-      {expanded && selectedCompleted && renderCompletedDetail(selectedCompleted)}
-      {expanded && selectedCompleted && deleteConfirm?.taskId === selectedCompleted.task.id && renderDeleteConfirmation(selectedCompleted)}
+      {expanded && selectedCompleted && <div className="completed-detail-anchor">
+        {renderCompletedDetail(selectedCompleted)}
+        {deleteConfirm?.taskId === selectedCompleted.task.id && renderDeleteConfirmation(selectedCompleted)}
+      </div>}
     </div>;
   };
 
   const renderDeleteConfirmation = (entry: HierarchyEntry): ReactElement | null => {
     if (deleteConfirm?.taskId !== entry.task.id) return null;
     const descendants = descendantsOf(entries, entry.task.id);
-    const previewPaths = descendants.slice(0, 3).map((candidate) => pathLabel(candidate, byId));
-    const otherCount = Math.max(0, descendants.length - previewPaths.length);
+    const deletionEntries = [entry, ...descendants];
     const isPendingDelete = pending === `delete:${entry.task.id}`;
-    return <div className={`delete-confirm ${isRemaining(entry) ? "delete-confirm-current" : "delete-confirm-completed"}`} data-delete-confirm={entry.task.id} role="group" aria-label={`${entry.task.title}の削除確認`}>
+    return <div className={`delete-confirm ${isRemaining(entry) ? "delete-confirm-current" : "delete-confirm-completed"}`} data-delete-confirm={entry.task.id} data-delete-root-id={entry.task.id} data-completed-task-context={!isRemaining(entry) ? entry.task.id : undefined} role="group" aria-label={`${pathLabel(entry, byId)}の削除確認（対象${deletionEntries.length}件）`}>
       <strong>{descendants.length === 0 ? `「${entry.task.title}」を削除します` : `「${entry.task.title}」と子孫${descendants.length}件を削除します`}</strong>
+      <span className="delete-confirm-count" data-delete-target-count={deletionEntries.length}>削除対象: {deletionEntries.length}件</span>
+      <span className="delete-confirm-root" data-delete-root-path={pathLabel(entry, byId)}>対象root: {pathLabel(entry, byId)}</span>
       <span>{descendants.length === 0 ? "タイムラインと通常履歴からも消えます。" : "子タスク・タイムライン・通常履歴からも消えます。"}</span>
-      {previewPaths.length > 0 && <ul>{previewPaths.map((path) => <li key={path}>{path}</li>)}{otherCount > 0 && <li>その他 {otherCount}件</li>}</ul>}
+      <ul aria-label={`削除対象の完全な階層パス（${deletionEntries.length}件）`}>
+        {deletionEntries.map((candidate) => <li key={candidate.task.id} data-delete-path-id={candidate.task.id}>{pathLabel(candidate, byId)}</li>)}
+      </ul>
       <div className="delete-confirm-actions">
         <button type="button" className="danger-action" data-focus-id={`delete-confirm:${entry.task.id}`} onClick={() => void confirmDelete()} disabled={pending !== null}>{isPendingDelete ? "削除中…" : "削除する"}</button>
         <button type="button" className="quiet-action" data-focus-id={`delete-cancel:${entry.task.id}`} onClick={cancelDelete} disabled={isPendingDelete}>キャンセル</button>
@@ -1619,6 +1965,8 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
   const renderRow = (entry: HierarchyEntry): ReactElement => {
     const children = projectedChildrenOf(entries, entry.task.id);
     const remainingChildren = children.filter(isRemaining);
+    const disclosure = projectTaskDetailDisclosure(disclosureState, entry.task.id, availableTaskIds);
+    const isSelected = disclosure.stableSelectionLink;
     const isCollapsed = collapsed.has(entry.task.id);
     const editing = editingTaskId === entry.task.id;
     const dropPlacement: Placement = { label: `${pathLabel(entry, byId)} の子の末尾`, parentTaskId: entry.task.id };
@@ -1635,24 +1983,23 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
       {dragState && <div className={`drop-seam ${isCurrentBefore ? "is-current" : ""} ${beforeValidation?.valid ? "" : "is-invalid"}`} data-drop-target={`before:${entry.task.id}`} data-drop-kind="before" data-drop-parent-id={entry.parentTaskId ?? ""} data-drop-before-id={entry.task.id} data-drop-label={beforePlacement.label} aria-label={`${entry.task.title} の前に配置`} aria-disabled={!beforeValidation?.valid}>
         <span aria-hidden={!isCurrentBefore}>{beforeValidation?.valid ? (dragState.taskId === entry.task.id ? "移動元" : "ここに挿入") : `⛔ ${beforeValidation?.reason}`}</span>
       </div>}
-      <div className={`history-row task-row ${dragState?.taskId === entry.task.id ? "is-dragging" : ""} ${selectedTaskId === entry.task.id ? "is-selected" : ""} ${editing ? "is-editing" : ""} ${stateCueClass}`} data-row-id={entry.task.id} data-state={entry.task.state} onFocusCapture={() => selectTask(entry.task.id)}>
-        <HistoryMark entry={entry} range={rangeView} nowMs={displayNowMs} selected={selectedTaskId === entry.task.id} onSelect={selectTask} onFit={fitSelected} />
+      <div className={`history-row task-row ${dragState?.taskId === entry.task.id ? "is-dragging" : ""} ${isSelected ? "is-selected" : ""} ${editing ? "is-editing" : ""} ${stateCueClass}`} data-row-id={entry.task.id} data-state={entry.task.state} data-disclosure-state={isSelected ? "selected" : "resting"} onFocusCapture={() => focusTask(entry.task.id)}>
+        <HistoryMark entry={entry} range={rangeView} nowMs={displayNowMs} selected={isSelected} ancestryPath={isSelected && entry.depth > 0 ? pathLabel(entry, byId) : undefined} onSelect={selectTask} onFit={fitSelected} />
         <div className={`now-hinge-cell ${isRemaining(entry) && rangeView.endMs < displayNowMs ? "is-discontinuous" : ""}`} aria-hidden="true">{isRemaining(entry) && rangeView.endMs < displayNowMs && <span>▷</span>}</div>
-        <div className={`current-identity ${dragState ? `is-drop-target ${dropValidation?.valid ? "is-valid" : "is-invalid"} ${isCurrentParent ? "is-current" : ""}` : ""}`} data-drop-target={dragState ? `parent:${entry.task.id}` : undefined} data-drop-kind={dragState ? "parent" : undefined} data-drop-parent-id={dragState ? entry.task.id : undefined} data-drop-label={dragState ? dropPlacement.label : undefined} aria-label={dragState ? (dropValidation?.valid ? `${entry.task.title}の子の末尾に配置` : `${entry.task.title}には配置できません: ${dropValidation?.reason ?? "不正な移動先"}`) : undefined} aria-disabled={dragState ? !dropValidation?.valid : undefined}>
+        <div className={`current-identity ${dragState ? `is-drop-target ${dropValidation?.valid ? "is-valid" : "is-invalid"} ${isCurrentParent ? "is-current" : ""}` : ""}`} data-drop-target={dragState ? `parent:${entry.task.id}` : undefined} data-drop-kind={dragState ? "parent" : undefined} data-drop-parent-id={dragState ? entry.task.id : undefined} data-drop-label={dragState ? dropPlacement.label : undefined} aria-label={dragState ? (dropValidation?.valid ? `${entry.task.title}の子の末尾に配置` : `${entry.task.title}には配置できません: ${dropValidation?.reason ?? "不正な移動先"}`) : undefined} aria-disabled={dragState ? !dropValidation?.valid : undefined} onClick={() => selectTask(entry.task.id)}>
           {dragState && isCurrentParent && <span className="identity-drop-cue" aria-hidden="true">{dropValidation?.valid ? `└ ${entry.task.title} の子の末尾` : `⛔ ${dropValidation?.reason ?? "配置できません"}`}</span>}
           <span className="branch-rail" aria-hidden="true" style={{ marginLeft: `${depthOffset}px` }} />
-          <button type="button" className="drag-handle" aria-label={`${entry.task.title}をドラッグして移動`} data-drag-handle="true" data-focus-id={`drag-handle:${entry.task.id}`} onPointerDown={(event) => startPointerDrag(event, entry)} onPointerMove={(event) => updatePointerTarget(event, entry)} onPointerUp={(event) => finishPointerDrag(event, entry)} onPointerCancel={(event) => cancelDrag(entry, event.pointerId)} onLostPointerCapture={() => cancelDrag(entry)} disabled={pending !== null || forest?.truncated}>⠿</button>
+          <button type="button" className="drag-handle" aria-label={`${entry.task.title}をドラッグして移動（EnterまたはSpaceでキーボード配置）`} data-drag-handle="true" data-focus-id={`drag-handle:${entry.task.id}`} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); beginKeyboardMove(entry); } }} onPointerDown={(event) => startPointerDrag(event, entry)} onPointerMove={(event) => updatePointerTarget(event, entry)} onPointerUp={(event) => finishPointerDrag(event, entry)} onPointerCancel={(event) => cancelDrag(entry, event.pointerId)} onLostPointerCapture={() => cancelDrag(entry)} disabled={pending !== null || forest?.truncated}>⠿</button>
           {children.length > 0 ? <button type="button" className="disclosure" aria-label={`${entry.task.title}を${isCollapsed ? "展開" : "折りたたむ"}`} aria-expanded={!isCollapsed} onClick={() => toggleCollapse(entry.task.id)}>{isCollapsed ? "▸" : "▾"}</button> : <span className="disclosure-spacer" aria-hidden="true" />}
           <button type="button" className={`completion-box ${isCompleting ? "is-pending" : ""}`} data-focus-id={`complete:${entry.task.id}`} aria-label={isCompleting ? `${entry.task.title}を完了処理中` : `${entry.task.title}を完了にする`} onClick={() => void complete(entry)} disabled={pending !== null}><span className="completion-glyph" aria-hidden="true">{isCompleting ? "···" : "✓"}</span><span className="completion-intent" aria-hidden="true">{isCompleting ? "完了処理中" : "完了"}</span></button>
           <div className="task-copy">
             {editing ? <form ref={renameFormRef} className="rename-form" onBlur={(event) => { const next = event.relatedTarget; if (next instanceof Node && event.currentTarget.contains(next)) return; requestOutsideRename(entry, editingTitleRef.current); }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTaskId(null); } }} onSubmit={(event) => { event.preventDefault(); void saveRename(entry); }}><input id={`task-label-${entry.task.id}`} aria-label={`${entry.task.title}の名前を変更`} defaultValue={entry.task.title} onChange={(event) => { editingTitleRef.current = event.currentTarget.value; }} autoFocus maxLength={240} /><button type="submit" disabled={pending !== null}>保存</button><button type="button" onClick={() => setEditingTaskId(null)}>取消</button></form> : <button id={`task-label-${entry.task.id}`} type="button" className="task-title" data-focus-id={`title:${entry.task.id}`} onDoubleClick={() => beginRename(entry)} onClick={() => beginRename(entry)}>{entry.task.title}</button>}
-            <span className="task-meta"><span className={`state-dot state-${entry.task.state}`} aria-hidden="true" />{stateLabel(entry.task.state)}{children.length > 0 && <span className="child-count">子 {remainingChildren.length}/{children.length}</span>}<span className={`memo-presence ${entry.task.memo ? "has-memo" : "is-empty"}`} data-memo-presence={entry.task.memo ? "present" : "empty"} title={entry.task.memo ? "メモあり" : "メモなし"}><span aria-hidden="true">{entry.task.memo ? "▣" : "□"}</span><span className="sr-only">{entry.task.memo ? "メモあり" : "メモなし"}</span></span></span>
-            {selectedTaskId === entry.task.id && entry.depth > 0 && <span className="hierarchy-path" data-ancestry-path={entry.task.id} aria-label={`祖先を含む階層: ${pathLabel(entry, byId)}`}>{pathLabel(entry, byId)}</span>}
+            <span className="task-meta"><span className={`state-dot state-${entry.task.state}`} aria-hidden="true" />{stateLabel(entry.task.state)}{isSelected && children.length > 0 && <span className="child-count">子 {remainingChildren.length}/{children.length}</span>}{isSelected && <span className={`memo-presence ${entry.task.memo ? "has-memo" : "is-empty"}`} data-memo-presence={entry.task.memo ? "present" : "empty"} title={entry.task.memo ? "メモあり" : "メモなし"}><span aria-hidden="true">{entry.task.memo ? "▣" : "□"}</span><span className="sr-only">{entry.task.memo ? "メモあり" : "メモなし"}</span></span>}</span>
           </div>
-          <div className={`row-actions ${editing ? "is-suppressed" : ""}`} aria-hidden={editing || undefined}>
-            <button type="button" className="quiet-action memo-action" data-focus-id={`memo:${entry.task.id}`} aria-label={`${entry.task.title}のメモを編集`} onClick={() => openMemo(entry)} disabled={pending !== null}>メモ</button>
-            <button type="button" className="quiet-action" data-focus-id={`add-child:${entry.task.id}`} onClick={() => toggleCreateChild(entry)} disabled={pending !== null}>＋子</button>
-            <button type="button" className="quiet-action delete-action" data-focus-id={`delete:${entry.task.id}`} onClick={() => beginDelete(entry)} disabled={pending !== null}>削除</button>
+          <div className={`row-actions ${isSelected ? "is-disclosed" : ""} ${editing ? "is-suppressed" : ""}`} aria-hidden={!isSelected || editing || undefined}>
+            <button type="button" className="quiet-action memo-action" data-focus-id={`memo:${entry.task.id}`} aria-label={`${entry.task.title}のメモを編集`} tabIndex={isSelected ? 0 : -1} onClick={() => openMemo(entry)} disabled={pending !== null}>メモ</button>
+            <button type="button" className="quiet-action child-action" data-focus-id={`add-child:${entry.task.id}`} tabIndex={isSelected ? 0 : -1} onClick={() => toggleCreateChild(entry)} disabled={pending !== null}>＋子</button>
+            <button type="button" className="quiet-action delete-action" data-focus-id={`delete:${entry.task.id}`} tabIndex={isSelected ? 0 : -1} onClick={() => beginDelete(entry)} disabled={pending !== null}>削除</button>
           </div>
         </div>
       </div>
@@ -1706,6 +2053,7 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
             {projectedChildrenOf(entries).map(renderVisibleEntry)}
             {entries.length > 0 && remainingEntries.length === 0 && <div className="history-empty-row"><div className="history-empty-history">完了した履歴を表示中</div><div className="now-hinge-cell" aria-hidden="true" /><div className="current-empty"><strong>現在のタスクはありません</strong><span>上の入力欄から新しい仕事を追加できます。</span></div></div>}
           </div>
+          {renderKeyboardPlacement()}
         </section>
         {dragState && (() => {
           const firstCompleted = firstCompletedSiblingOf(entries);
@@ -1733,7 +2081,6 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
         })()}
         {forest?.truncated && <p className="limit-note">表示上限に達しています。安全のため移動操作を停止しています。</p>}
       </>}
-      {/* Manual keyboard placement is intentionally unavailable in this UI. Pointer drag/drop remains available. */}
     </main>
     {memoEditor && <MemoDialog
       editor={memoEditor}
