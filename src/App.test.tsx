@@ -425,7 +425,7 @@ describe("history-left / NOW-right surface", () => {
     await waitFor(() => expect(within(receipt).getByText(/「保持する操作」を作成/)).toBeInTheDocument());
 
     status.mockRejectedValueOnce({ code: "persistence-failure", message: "status unavailable" });
-    await userEvent.click(screen.getByText("保持する操作", { selector: ".task-title" }));
+    await userEvent.click(await screen.findByText("保持する操作", { selector: ".task-title" }));
     const renameInput = screen.getByRole("textbox", { name: "保持する操作の名前を変更" });
     await userEvent.clear(renameInput);
     await userEvent.type(renameInput, "更新後の操作");
