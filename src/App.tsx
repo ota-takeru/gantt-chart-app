@@ -1,4 +1,4 @@
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
 import packageMetadata from "../package.json";
 import { createFixtureTaskApi, previewVariantFromLocation, type PreviewVariant } from "./api/fixtureTaskApi";
 import { createFixtureUpdateApi } from "./api/fixtureUpdateApi";
@@ -571,7 +571,7 @@ function containsRemainingDescendant(entries: HierarchyEntry[], taskId: string):
 
 function useFocusRestoration(focusId: string | null) {
   useEffect(() => {
-    if (!focusId) return;
+    if (!focusId || focusId.startsWith("drag-handle:")) return;
     const target = document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(focusId)}"]`);
     target?.focus({ preventScroll: true });
   }, [focusId]);
@@ -824,7 +824,7 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     memoReturnFocusRef.current = null;
     document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(returnFocusId)}"]`)?.focus();
   }, [memoEditor]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (keyboardPlacement.phase === "choosing" || keyboardPlacement.phase === "submitting") {
       keyboardPlacementRef.current?.focus({ preventScroll: true });
     }
@@ -838,17 +838,20 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     document.querySelector<HTMLElement>(`[data-focus-id="delete-cancel:${CSS.escape(deleteConfirm.taskId)}"]`)?.focus({ preventScroll: true });
   }, [deleteConfirm]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       (keyboardPlacement.phase !== "idle" && keyboardPlacement.phase !== "failed") ||
       !focusReturnId?.startsWith("drag-handle:")
+      || pending !== null
+      || pendingRef.current !== null
+      || loading
+      || refreshing
     ) return;
-    const frame = requestUiFrame(() => {
-      document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(focusReturnId)}"]`)?.focus({ preventScroll: true });
-      setFocusReturnId((current) => current === focusReturnId ? null : current);
-    });
-    return () => cancelUiFrame(frame);
-  }, [focusReturnId, keyboardPlacement.phase]);
+    const target = document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(focusReturnId)}"]`);
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    setFocusReturnId((current) => current === focusReturnId ? null : current);
+  }, [focusReturnId, keyboardPlacement.phase, loading, pending, refreshing, forest]);
 
   useEffect(() => {
     if (previewMode) return;
@@ -1302,14 +1305,14 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
       const result = await action();
       invalidateActualHistory();
       setNotice(success);
-      onSuccess?.();
       await loadWorkspace(restoreFocusId);
+      onSuccess?.();
       return result;
     } catch (reason) {
       const error = normalizeDomainError(reason);
       setActionError(error);
-      onError?.(error);
       if (error.code === "stale-hierarchy" || error.code === "version-conflict" || error.code === "stale-version" || error.code === "stale-undo" || error.code === "undo-not-available" || error.code === "undo-conflict") await loadWorkspace(restoreFocusId);
+      onError?.(error);
       return undefined;
     } finally {
       pendingRef.current = null;
