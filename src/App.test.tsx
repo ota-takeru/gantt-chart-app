@@ -145,7 +145,7 @@ describe("history-left / NOW-right surface", () => {
     expect(document.querySelectorAll(".history-pocket.is-expanded .pocket-mark").length).toBe(30);
   });
 
-  it("renders a compact pocket heading before its inset member lanes", async () => {
+  it("renders a compact pocket heading with geometry-neutral member lanes", async () => {
     renderPreview("typical");
     await ready();
     const pocket = document.querySelector(".history-pocket") as HTMLElement;
@@ -166,8 +166,17 @@ describe("history-left / NOW-right surface", () => {
     expect(caption).toHaveAttribute("aria-expanded", "true");
     const lanes = pocket.querySelector(".pocket-lanes") as HTMLElement;
     expect(lanes).toBe(caption.nextElementSibling);
-    expect(getComputedStyle(lanes).marginLeft).toBe("8px");
-    expect(getComputedStyle(lanes).borderLeftWidth).toBe("2px");
+    expect(getComputedStyle(lanes).marginLeft).toBe("");
+    expect(getComputedStyle(lanes).borderLeftWidth).toBe("");
+    expect(getComputedStyle(lanes).paddingLeft).toBe("0px");
+    expect(getComputedStyle(lanes).paddingRight).toBe("0px");
+    const styles = loadedStyles();
+    const laneRule = styles.match(/\.history-pocket \.pocket-lanes\s*\{[^}]+\}/)?.[0] ?? "";
+    expect(laneRule).toContain("width: 100%");
+    expect(laneRule).not.toMatch(/margin-left|padding-left|padding-right|border-left/);
+    const overlayRule = styles.match(/\.history-pocket \.pocket-lanes::before\s*\{[^}]+\}/)?.[0] ?? "";
+    expect(overlayRule).toContain("position: absolute");
+    expect(overlayRule).toContain("inset: 0");
   });
 
   it("keeps the dense pocket heading and lane grouping bounded for every pocket", async () => {
@@ -181,7 +190,47 @@ describe("history-left / NOW-right surface", () => {
     expect(pockets.every((pocket) => pocket.querySelectorAll(".pocket-member-row").length === 0)).toBe(true);
     const expandedPocket = await expandPocket("dense-completed-root-1");
     expect(expandedPocket.querySelector(".pocket-caption")?.nextElementSibling?.matches(".pocket-lanes")).toBe(true);
-    expect(getComputedStyle(expandedPocket.querySelector(".pocket-lanes") as HTMLElement).marginLeft).toBe("8px");
+    expect(getComputedStyle(expandedPocket.querySelector(".pocket-lanes") as HTMLElement).marginLeft).toBe("");
+  });
+
+  it("keeps completed pocket tracks aligned with ordinary rails while retaining percentage geometry", async () => {
+    const api = createFixtureTaskApi("typical");
+    const originalLoad = api.getTaskForest.bind(api);
+    const now = Date.now();
+    vi.spyOn(api, "getTaskForest").mockImplementation(async (limit) => {
+      const snapshot = await originalLoad(limit);
+      return {
+        ...snapshot,
+        entries: snapshot.entries.map((entry) => entry.task.id === "task-completed"
+          ? { ...entry, task: { ...entry.task, createdAt: new Date(now - 6 * 60 * 60 * 1000).toISOString(), completedAt: new Date(now - 2 * 60 * 60 * 1000).toISOString() } }
+          : entry),
+      };
+    });
+    render(<App api={api} />);
+    await ready();
+    await expandPocket("task-completed");
+
+    const ordinaryRail = timelineCell("task-api").querySelector(".history-rail") as HTMLElement;
+    const pocketMark = timelineCell("task-completed");
+    const pocketTrack = pocketMark.closest(".pocket-member-track") as HTMLElement;
+    const lanes = pocketTrack.closest(".pocket-lanes") as HTMLElement;
+    expect(getComputedStyle(ordinaryRail).width).toBe("100%");
+    expect(getComputedStyle(pocketTrack).width).toBe("100%");
+    expect(getComputedStyle(timelineCell("task-api")).paddingLeft).toBe(getComputedStyle(pocketFor("task-completed")).paddingLeft);
+    expect(getComputedStyle(timelineCell("task-api")).borderLeftWidth).toBe(getComputedStyle(pocketFor("task-completed")).borderLeftWidth);
+    expect(getComputedStyle(timelineCell("task-api")).borderRightWidth).toBe(getComputedStyle(pocketFor("task-completed")).borderRightWidth);
+    expect(getComputedStyle(lanes).paddingLeft).toBe("0px");
+    expect(getComputedStyle(lanes).paddingRight).toBe("0px");
+
+    const rangeStart = Number(timelineRuler().dataset.rangeStartMs);
+    const rangeEnd = Number(timelineRuler().dataset.rangeEndMs);
+    const span = rangeEnd - rangeStart;
+    const created = Number(pocketMark.dataset.startMs);
+    const completed = Number(pocketMark.dataset.endMs);
+    expect(pocketMark.style.left).toMatch(/%$/);
+    expect(pocketMark.style.width).toMatch(/%$/);
+    expect(Number.parseFloat(pocketMark.style.left)).toBeCloseTo(((created - rangeStart) / span) * 100, 10);
+    expect(Number.parseFloat(pocketMark.style.width)).toBeCloseTo(((completed - created) / span) * 100, 10);
   });
 
   it("keeps add, range, and reload in one desktop tab order with a two-tier narrow layout", async () => {
@@ -585,12 +634,14 @@ describe("history-left / NOW-right surface", () => {
     const source = rowFor("再現条件をテストケースにする");
     const handle = within(source).getByRole("button", { name: /再現条件をテストケースにするをドラッグして移動/ });
     pointerDown(handle);
-    const rootEnd = screen.getByLabelText("最上位の末尾に配置");
-    expect(rootEnd).toHaveTextContent("最上位の末尾に配置");
+    const rootEnd = document.querySelector(".root-landing-sill") as HTMLElement;
+    expect(rootEnd).toHaveAttribute("aria-label", "最上位の末尾（完了履歴の前）に配置");
+    expect(rootEnd).toHaveTextContent("最上位の末尾（完了履歴の前）に配置");
+    expect(rootEnd).toHaveAttribute("data-drop-before-id", "task-no-session");
     expect(getComputedStyle(rootEnd).position).toBe("fixed");
     pointerMove(handle, rootEnd);
     pointerUp(handle);
-    await waitFor(() => expect(move).toHaveBeenCalledWith("task-next-1", undefined, undefined, 4, expect.any(String)));
+    await waitFor(() => expect(move).toHaveBeenCalledWith("task-next-1", undefined, "task-no-session", 4, expect.any(String)));
   });
 
   it("starts edge autoscroll for ordinary targets but stops it at the fixed root sill", async () => {
@@ -607,7 +658,7 @@ describe("history-left / NOW-right surface", () => {
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 80, clientY: 1, buttons: 1 });
     expect(frame).toHaveBeenCalledTimes(1);
 
-    const rootEnd = screen.getByLabelText("最上位の末尾に配置");
+    const rootEnd = document.querySelector(".root-landing-sill") as HTMLElement;
     pointAt(rootEnd);
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 80, clientY: 767, buttons: 1 });
     expect(cancelFrame).toHaveBeenCalledWith(41);
@@ -628,6 +679,38 @@ describe("history-left / NOW-right surface", () => {
     await waitFor(() => expect(move).toHaveBeenCalledWith("task-next-3", "task-api", "task-next-1", 4, expect.any(String)));
     expect(move.mock.calls[0][1]).toBe("task-api");
     expect(move.mock.calls[0][2]).toBe("task-next-1");
+  });
+
+  it("moves a nested task to the end of a sibling scope before completed history", async () => {
+    const api = renderPreview("typical");
+    const move = vi.spyOn(api, "moveTaskInHierarchy");
+    await ready();
+    const source = rowFor("レビューコメントへ返信");
+    const handle = within(source).getByRole("button", { name: /レビューコメントへ返信をドラッグして移動/ });
+    pointerDown(handle);
+    const boundary = screen.getByLabelText("APIレスポンス遅延の原因を切り分ける の子の末尾（完了履歴の前）");
+    expect(boundary).toHaveAttribute("data-drop-kind", "before");
+    expect(boundary).toHaveAttribute("data-drop-boundary", "remaining-completed");
+    expect(boundary).toHaveAttribute("data-drop-parent-id", "task-api");
+    expect(boundary).toHaveAttribute("data-drop-before-id", "task-completed");
+    pointerMove(handle, boundary);
+    pointerUp(handle);
+    await waitFor(() => expect(move).toHaveBeenCalledWith("task-next-3", "task-api", "task-completed", 4, expect.any(String)));
+  });
+
+  it("moves a top-level task to the current top-level boundary before completed history", async () => {
+    const api = renderPreview("typical");
+    const move = vi.spyOn(api, "moveTaskInHierarchy");
+    await ready();
+    const source = rowFor("再現条件をテストケースにする");
+    const handle = within(source).getByRole("button", { name: /再現条件をテストケースにするをドラッグして移動/ });
+    pointerDown(handle);
+    const boundary = screen.getByLabelText("最上位の末尾（完了履歴の前）");
+    expect(getComputedStyle(boundary).height).toBe("0px");
+    expect(getComputedStyle(boundary.querySelector("span") as HTMLElement).position).toBe("absolute");
+    pointerMove(handle, boundary);
+    pointerUp(handle);
+    await waitFor(() => expect(move).toHaveBeenCalledWith("task-next-1", undefined, "task-no-session", 4, expect.any(String)));
   });
 
   it("keeps drag affordances dimension-neutral and highlights only the hovered basin", async () => {
@@ -691,7 +774,7 @@ describe("history-left / NOW-right surface", () => {
     pointerDown(handle);
     fireEvent.pointerCancel(handle, { pointerId: 1, clientX: 80, clientY: 80 });
     expect(move).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("最上位の末尾に配置")).not.toBeInTheDocument();
+    expect(document.querySelector(".root-landing-sill")).not.toBeInTheDocument();
   });
 
   it("recovers a stale pointer placement without speculative commit", async () => {
@@ -1132,16 +1215,21 @@ describe("history-left / NOW-right surface", () => {
     expect(history).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps depth 0 through 8 distinct and exposes the selected deep ancestry", async () => {
+  it("keeps depth 0 through 8 distinct without visible numbers and exposes the selected deep ancestry", async () => {
     renderPreview("deep");
     await ready();
     const branches = Array.from(document.querySelectorAll<HTMLElement>(".tree-branch[data-depth]"));
     expect(new Set(branches.map((branch) => branch.dataset.depth))).toEqual(new Set(["0", "1", "2", "3", "4", "5", "6", "7", "8"]));
+    expect(new Set(branches.map((branch) => branch.getAttribute("aria-level")))).toEqual(new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9"]));
+    expect(branches.every((branch) => branch.querySelector(".depth-cue") === null)).toBe(true);
+    expect(new Set(branches.map((branch) => branch.style.getPropertyValue("--depth-offset"))).size).toBe(9);
+    expect(branches.every((branch) => branch.querySelector(".branch-rail") !== null)).toBe(true);
+    expect(loadedStyles()).toMatch(/\.branch-rail::after\s*\{[^}]*width:\s*clamp\(/);
     const deepRow = document.querySelector("[data-row-id='deep-task-8']") as HTMLElement;
     expect(deepRow).toBeInTheDocument();
     expect(deepRow.closest(".tree-branch")).toHaveClass("depth-8");
     expect(deepRow.closest(".tree-branch")).toHaveAttribute("data-depth", "8");
-    expect(deepRow.querySelector(".depth-cue")).toHaveTextContent("階層 8");
+    expect(deepRow.querySelector(".depth-cue")).toBeNull();
 
     await userEvent.click(timelineCell("deep-task-8"));
     const path = document.querySelector("[data-ancestry-path='deep-task-8']") as HTMLElement;

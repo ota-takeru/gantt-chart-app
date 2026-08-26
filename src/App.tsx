@@ -362,6 +362,10 @@ function isRemaining(entry: HierarchyEntry): boolean {
   return entry.task.state !== "completed";
 }
 
+function boundedDepthOffset(depth: number): number {
+  return Math.min(Math.max(depth, 0), 8) * 12 + 8;
+}
+
 function stateLabel(state: TaskSnapshot["state"]): string {
   if (state === "active") return "着手中";
   if (state === "paused") return "保留";
@@ -425,6 +429,15 @@ function projectedChildrenOf(entries: HierarchyEntry[], parentTaskId?: string): 
   });
 }
 
+/**
+ * Keep the first completed entry as the durable before-anchor for the visible
+ * end-of-current-work boundary. The mutation still receives the real hierarchy
+ * scope and sibling id, so retained sibling order is never reconstructed.
+ */
+function firstCompletedSiblingOf(entries: HierarchyEntry[], parentTaskId?: string): HierarchyEntry | undefined {
+  return projectedChildrenOf(entries, parentTaskId).find((entry) => !isRemaining(entry));
+}
+
 function projectedForestOrder(entries: HierarchyEntry[]): string[] {
   const result: string[] = [];
   const visit = (parentTaskId?: string) => {
@@ -453,7 +466,7 @@ function placementFromDropTarget(target: HTMLElement | null): Placement | null {
   if (!target) return null;
   const kind = target.dataset.dropKind;
   const label = target.dataset.dropLabel ?? target.getAttribute("aria-label") ?? "移動先";
-  if (kind === "root") return { label };
+  if (kind === "root") return { label, beforeTaskId: target.dataset.dropBeforeId || undefined };
   if (kind === "parent") {
     const parentTaskId = target.dataset.dropParentId;
     return parentTaskId ? { label, parentTaskId } : null;
@@ -1535,12 +1548,47 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     </div>;
   };
 
+  const renderCompletedBoundarySeam = (firstCompleted: HierarchyEntry): ReactElement | null => {
+    if (!dragState) return null;
+    const parent = firstCompleted.parentTaskId ? byId.get(firstCompleted.parentTaskId) : undefined;
+    const boundaryLabel = parent
+      ? `${pathLabel(parent, byId)} の子の末尾（完了履歴の前）`
+      : "最上位の末尾（完了履歴の前）";
+    const placement: Placement = {
+      label: boundaryLabel,
+      parentTaskId: firstCompleted.parentTaskId,
+      beforeTaskId: firstCompleted.task.id,
+    };
+    const validation = validatePlacement(dragState.taskId, placement);
+    const isCurrent = Boolean(
+      dragState.placement &&
+      dragState.placement.parentTaskId === placement.parentTaskId &&
+      dragState.placement.beforeTaskId === placement.beforeTaskId,
+    );
+    return <div
+      className={`drop-seam drop-seam-completed-boundary ${isCurrent ? "is-current" : ""} ${validation.valid ? "" : "is-invalid"}`}
+      data-drop-target={`before:${firstCompleted.task.id}`}
+      data-drop-kind="before"
+      data-drop-boundary="remaining-completed"
+      data-drop-parent-id={firstCompleted.parentTaskId ?? ""}
+      data-drop-before-id={firstCompleted.task.id}
+      data-drop-label={placement.label}
+      aria-label={placement.label}
+      aria-disabled={!validation.valid}
+    >
+      <span aria-hidden={!isCurrent}>{validation.valid ? "ここに挿入（末尾・完了履歴の前）" : `⛔ ${validation.reason}`}</span>
+    </div>;
+  };
+
   const renderPocket = (entry: HierarchyEntry): ReactElement => {
     const members = [entry, ...descendantsOf(entries, entry.task.id).filter((candidate) => completedOnlyIds.has(candidate.task.id))];
     const expanded = expandedPockets.has(entry.task.id);
     const selectedCompleted = selectedEntry && !isRemaining(selectedEntry) && members.some((member) => member.task.id === selectedEntry.task.id) ? selectedEntry : null;
-    const depthStyle = { "--depth": entry.depth, "--depth-offset": `${Math.min(entry.depth, 8) * 12 + 8}px` } as CSSProperties;
+    const firstCompleted = firstCompletedSiblingOf(entries, entry.parentTaskId);
+    const depthOffset = boundedDepthOffset(entry.depth);
+    const depthStyle = { "--depth": entry.depth, "--depth-offset": `${depthOffset}px` } as CSSProperties;
     return <div key={`pocket:${entry.task.id}`} className={`tree-branch pocket-branch depth-${entry.depth}`} data-task-id={entry.task.id} data-depth={entry.depth} style={depthStyle} role="treeitem" aria-level={entry.depth + 1} aria-label={`${entry.task.title}の完了履歴 ${members.length}件`} aria-expanded={expanded} onFocusCapture={() => selectTask(entry.task.id)}>
+      {firstCompleted?.task.id === entry.task.id && renderCompletedBoundarySeam(firstCompleted)}
       <div className="history-row pocket-row" data-row-id={`pocket:${entry.task.id}`}>
         <HistoryPocket root={entry} members={members} range={rangeView} nowMs={displayNowMs} expanded={expanded} selectedTaskId={selectedTaskId} onSelect={selectTask} onToggle={togglePocket} />
         <div className="now-hinge-cell" aria-hidden="true" />
@@ -1581,7 +1629,8 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     const isCurrentBefore = Boolean(dragState?.placement && dragState.placement.parentTaskId === beforePlacement.parentTaskId && dragState.placement.beforeTaskId === beforePlacement.beforeTaskId);
     const isCompleting = pending === `complete:${entry.task.id}`;
     const stateCueClass = entry.task.state === "active" ? "is-active" : entry.task.state === "paused" ? "is-paused" : "";
-    const depthStyle = { "--depth": entry.depth, "--depth-offset": `${Math.min(entry.depth, 8) * 12 + 8}px` } as CSSProperties;
+    const depthOffset = boundedDepthOffset(entry.depth);
+    const depthStyle = { "--depth": entry.depth, "--depth-offset": `${depthOffset}px` } as CSSProperties;
     return <div key={entry.task.id} id={`history-task-${entry.task.id}`} className={`tree-branch depth-${entry.depth} ${isCollapsed ? "is-collapsed" : ""}`} data-task-id={entry.task.id} data-depth={entry.depth} style={depthStyle} role="treeitem" aria-level={entry.depth + 1} aria-labelledby={`task-label-${entry.task.id}`} aria-describedby={`lifetime-description-${entry.task.id}`} aria-expanded={children.length > 0 ? !isCollapsed : undefined}>
       {dragState && <div className={`drop-seam ${isCurrentBefore ? "is-current" : ""} ${beforeValidation?.valid ? "" : "is-invalid"}`} data-drop-target={`before:${entry.task.id}`} data-drop-kind="before" data-drop-parent-id={entry.parentTaskId ?? ""} data-drop-before-id={entry.task.id} data-drop-label={beforePlacement.label} aria-label={`${entry.task.title} の前に配置`} aria-disabled={!beforeValidation?.valid}>
         <span aria-hidden={!isCurrentBefore}>{beforeValidation?.valid ? (dragState.taskId === entry.task.id ? "移動元" : "ここに挿入") : `⛔ ${beforeValidation?.reason}`}</span>
@@ -1591,13 +1640,13 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
         <div className={`now-hinge-cell ${isRemaining(entry) && rangeView.endMs < displayNowMs ? "is-discontinuous" : ""}`} aria-hidden="true">{isRemaining(entry) && rangeView.endMs < displayNowMs && <span>▷</span>}</div>
         <div className={`current-identity ${dragState ? `is-drop-target ${dropValidation?.valid ? "is-valid" : "is-invalid"} ${isCurrentParent ? "is-current" : ""}` : ""}`} data-drop-target={dragState ? `parent:${entry.task.id}` : undefined} data-drop-kind={dragState ? "parent" : undefined} data-drop-parent-id={dragState ? entry.task.id : undefined} data-drop-label={dragState ? dropPlacement.label : undefined} aria-label={dragState ? (dropValidation?.valid ? `${entry.task.title}の子の末尾に配置` : `${entry.task.title}には配置できません: ${dropValidation?.reason ?? "不正な移動先"}`) : undefined} aria-disabled={dragState ? !dropValidation?.valid : undefined}>
           {dragState && isCurrentParent && <span className="identity-drop-cue" aria-hidden="true">{dropValidation?.valid ? `└ ${entry.task.title} の子の末尾` : `⛔ ${dropValidation?.reason ?? "配置できません"}`}</span>}
-          <span className="branch-rail" aria-hidden="true" />
+          <span className="branch-rail" aria-hidden="true" style={{ marginLeft: `${depthOffset}px` }} />
           <button type="button" className="drag-handle" aria-label={`${entry.task.title}をドラッグして移動`} data-drag-handle="true" data-focus-id={`drag-handle:${entry.task.id}`} onPointerDown={(event) => startPointerDrag(event, entry)} onPointerMove={(event) => updatePointerTarget(event, entry)} onPointerUp={(event) => finishPointerDrag(event, entry)} onPointerCancel={(event) => cancelDrag(entry, event.pointerId)} onLostPointerCapture={() => cancelDrag(entry)} disabled={pending !== null || forest?.truncated}>⠿</button>
           {children.length > 0 ? <button type="button" className="disclosure" aria-label={`${entry.task.title}を${isCollapsed ? "展開" : "折りたたむ"}`} aria-expanded={!isCollapsed} onClick={() => toggleCollapse(entry.task.id)}>{isCollapsed ? "▸" : "▾"}</button> : <span className="disclosure-spacer" aria-hidden="true" />}
           <button type="button" className={`completion-box ${isCompleting ? "is-pending" : ""}`} data-focus-id={`complete:${entry.task.id}`} aria-label={isCompleting ? `${entry.task.title}を完了処理中` : `${entry.task.title}を完了にする`} onClick={() => void complete(entry)} disabled={pending !== null}><span className="completion-glyph" aria-hidden="true">{isCompleting ? "···" : "✓"}</span><span className="completion-intent" aria-hidden="true">{isCompleting ? "完了処理中" : "完了"}</span></button>
           <div className="task-copy">
             {editing ? <form ref={renameFormRef} className="rename-form" onBlur={(event) => { const next = event.relatedTarget; if (next instanceof Node && event.currentTarget.contains(next)) return; requestOutsideRename(entry, editingTitleRef.current); }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTaskId(null); } }} onSubmit={(event) => { event.preventDefault(); void saveRename(entry); }}><input id={`task-label-${entry.task.id}`} aria-label={`${entry.task.title}の名前を変更`} defaultValue={entry.task.title} onChange={(event) => { editingTitleRef.current = event.currentTarget.value; }} autoFocus maxLength={240} /><button type="submit" disabled={pending !== null}>保存</button><button type="button" onClick={() => setEditingTaskId(null)}>取消</button></form> : <button id={`task-label-${entry.task.id}`} type="button" className="task-title" data-focus-id={`title:${entry.task.id}`} onDoubleClick={() => beginRename(entry)} onClick={() => beginRename(entry)}>{entry.task.title}</button>}
-            <span className="task-meta"><span className={`state-dot state-${entry.task.state}`} aria-hidden="true" />{stateLabel(entry.task.state)}<span className="depth-cue" aria-label={`階層 ${entry.depth}`}>階層 {entry.depth}</span>{children.length > 0 && <span className="child-count">子 {remainingChildren.length}/{children.length}</span>}<span className={`memo-presence ${entry.task.memo ? "has-memo" : "is-empty"}`} data-memo-presence={entry.task.memo ? "present" : "empty"} title={entry.task.memo ? "メモあり" : "メモなし"}><span aria-hidden="true">{entry.task.memo ? "▣" : "□"}</span><span className="sr-only">{entry.task.memo ? "メモあり" : "メモなし"}</span></span></span>
+            <span className="task-meta"><span className={`state-dot state-${entry.task.state}`} aria-hidden="true" />{stateLabel(entry.task.state)}{children.length > 0 && <span className="child-count">子 {remainingChildren.length}/{children.length}</span>}<span className={`memo-presence ${entry.task.memo ? "has-memo" : "is-empty"}`} data-memo-presence={entry.task.memo ? "present" : "empty"} title={entry.task.memo ? "メモあり" : "メモなし"}><span aria-hidden="true">{entry.task.memo ? "▣" : "□"}</span><span className="sr-only">{entry.task.memo ? "メモあり" : "メモなし"}</span></span></span>
             {selectedTaskId === entry.task.id && entry.depth > 0 && <span className="hierarchy-path" data-ancestry-path={entry.task.id} aria-label={`祖先を含む階層: ${pathLabel(entry, byId)}`}>{pathLabel(entry, byId)}</span>}
           </div>
           <div className={`row-actions ${editing ? "is-suppressed" : ""}`} aria-hidden={editing || undefined}>
@@ -1658,7 +1707,30 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
             {entries.length > 0 && remainingEntries.length === 0 && <div className="history-empty-row"><div className="history-empty-history">完了した履歴を表示中</div><div className="now-hinge-cell" aria-hidden="true" /><div className="current-empty"><strong>現在のタスクはありません</strong><span>上の入力欄から新しい仕事を追加できます。</span></div></div>}
           </div>
         </section>
-        {dragState && (() => { const rootPlacement: Placement = { label: "最上位の末尾" }; const validation = validatePlacement(dragState.taskId, rootPlacement); const isCurrentRoot = Boolean(dragState.placement && !dragState.placement.parentTaskId && !dragState.placement.beforeTaskId); return <div className={`root-landing-sill ${validation.valid ? "is-valid" : "is-invalid"} ${isCurrentRoot ? "is-current" : ""}`} data-drop-target="root-end" data-drop-kind="root" data-drop-label={rootPlacement.label} aria-disabled={!validation.valid} aria-label={validation.valid ? "最上位の末尾に配置" : `最上位には配置できません: ${validation.reason ?? "不正な移動先"}`}>{validation.valid ? "最上位の末尾に配置" : `⛔ ${validation.reason ?? "配置できません"}`}</div>; })()}
+        {dragState && (() => {
+          const firstCompleted = firstCompletedSiblingOf(entries);
+          const rootPlacement: Placement = {
+            label: firstCompleted ? "最上位の末尾（完了履歴の前）" : "最上位の末尾",
+            beforeTaskId: firstCompleted?.task.id,
+          };
+          const validation = validatePlacement(dragState.taskId, rootPlacement);
+          const isCurrentRoot = Boolean(
+            dragState.placement &&
+            !dragState.placement.parentTaskId &&
+            dragState.placement.beforeTaskId === rootPlacement.beforeTaskId,
+          );
+          const rootLabel = `${rootPlacement.label}に配置`;
+          return <div
+            className={`root-landing-sill ${validation.valid ? "is-valid" : "is-invalid"} ${isCurrentRoot ? "is-current" : ""}`}
+            data-drop-target="root-end"
+            data-drop-kind="root"
+            data-drop-boundary={firstCompleted ? "remaining-completed" : undefined}
+            data-drop-before-id={rootPlacement.beforeTaskId}
+            data-drop-label={rootPlacement.label}
+            aria-disabled={!validation.valid}
+            aria-label={validation.valid ? rootLabel : `最上位には配置できません: ${validation.reason ?? "不正な移動先"}`}
+          >{validation.valid ? rootLabel : `⛔ ${validation.reason ?? "配置できません"}`}</div>;
+        })()}
         {forest?.truncated && <p className="limit-note">表示上限に達しています。安全のため移動操作を停止しています。</p>}
       </>}
       {/* Manual keyboard placement is intentionally unavailable in this UI. Pointer drag/drop remains available. */}
