@@ -406,8 +406,13 @@ describe("history-left / NOW-right surface", () => {
 
     await userEvent.click(within(receipt).getByRole("button", { name: "元に戻す" }));
     await waitFor(() => expect(within(receipt).getByText(/「二つ目」を作成/)).toBeInTheDocument());
-    expect(document.activeElement).toBe(within(receipt).getByRole("button", { name: "元に戻す" }));
-    await userEvent.click(within(receipt).getByRole("button", { name: "元に戻す" }));
+    const nextUndo = await waitFor(() => {
+      const button = within(receipt).getByRole("button", { name: "元に戻す" });
+      expect(button).toBeEnabled();
+      return button;
+    });
+    await waitFor(() => expect(document.activeElement).toBe(nextUndo));
+    await userEvent.click(nextUndo);
     await waitFor(() => expect(within(receipt).getByText("元に戻せる操作はありません")).toBeInTheDocument());
     expect(document.activeElement).toBe(receipt);
     expect(undoCall).toHaveBeenCalledTimes(3);
