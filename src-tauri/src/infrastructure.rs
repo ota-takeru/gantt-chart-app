@@ -698,10 +698,12 @@ pub fn rebalance_queue(transaction: &Transaction<'_>) -> Result<(), DomainError>
         .map_err(storage_error)?;
     drop(statement);
 
-    // Temporarily move keys into a disjoint negative range so a UNIQUE
-    // constraint cannot fail while the queue is being renumbered.
+    // Rebuild the ordering rows inside the caller's transaction. Reachable
+    // queue positions include zero and negative values, so no arithmetic
+    // transform of the existing keys is guaranteed to provide a disjoint
+    // temporary namespace under UNIQUE(position).
     transaction
-        .execute("UPDATE queue_entries SET position = -position - 1", [])
+        .execute("DELETE FROM queue_entries", [])
         .map_err(storage_error)?;
     for (index, task_id) in ids.iter().enumerate() {
         let position = (index as i64 + 1).checked_mul(ORDER_GAP).ok_or_else(|| {
@@ -709,8 +711,8 @@ pub fn rebalance_queue(transaction: &Transaction<'_>) -> Result<(), DomainError>
         })?;
         transaction
             .execute(
-                "UPDATE queue_entries SET position = ?1 WHERE task_id = ?2",
-                params![position, task_id],
+                "INSERT INTO queue_entries (task_id, position) VALUES (?1, ?2)",
+                params![task_id, position],
             )
             .map_err(storage_error)?;
     }

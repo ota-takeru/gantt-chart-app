@@ -73,13 +73,228 @@ struct ObservableSnapshot {
     events: Vec<SnapshotEvent>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UndoDeltaV2 {
+    format_version: u8,
+    task_scope_ids: Vec<String>,
+    tasks: Vec<SnapshotTask>,
+    queue_scope_ids: Vec<String>,
+    queue_entries: Vec<SnapshotQueueEntry>,
+    hierarchy_scope_ids: Vec<String>,
+    hierarchy_entries: Vec<SnapshotHierarchyEntry>,
+    sessions: Vec<SnapshotSession>,
+    events: Vec<SnapshotEvent>,
+}
+
+enum StoredUndoPayload {
+    DeltaV2(UndoDeltaV2),
+    Legacy(ObservableSnapshot),
+}
+
 struct JournalEntry {
     operation_token: String,
+    operation_id: String,
     affected_task_ids: Vec<String>,
-    snapshot: ObservableSnapshot,
+    payload: StoredUndoPayload,
     expected_source_revision: i64,
     expected_hierarchy_revision: i64,
     expected_queue_revision: i64,
+}
+
+fn normalized_ids(ids: &[String]) -> Vec<String> {
+    let mut normalized = ids.to_vec();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn placeholders(count: usize) -> String {
+    std::iter::repeat_n("?", count)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn snapshot_tasks_for_ids(
+    connection: &Connection,
+    task_ids: &[String],
+) -> Result<Vec<SnapshotTask>, DomainError> {
+    if task_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT id, title, state, created_at, memo, completed_at, version
+             FROM tasks WHERE id IN ({}) ORDER BY id",
+            placeholders(task_ids.len())
+        ))
+        .map_err(db::storage_error)?;
+    let rows = statement
+        .query_map(rusqlite::params_from_iter(task_ids.iter()), |row| {
+            Ok(SnapshotTask {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                state: row.get(2)?,
+                created_at: row.get(3)?,
+                memo: row.get(4)?,
+                completed_at: row.get(5)?,
+                version: row.get(6)?,
+            })
+        })
+        .map_err(db::storage_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db::storage_error)?;
+    Ok(rows)
+}
+
+fn snapshot_queue_for_ids(
+    connection: &Connection,
+    task_ids: &[String],
+) -> Result<Vec<SnapshotQueueEntry>, DomainError> {
+    if task_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT task_id, position FROM queue_entries
+             WHERE task_id IN ({}) ORDER BY position, task_id",
+            placeholders(task_ids.len())
+        ))
+        .map_err(db::storage_error)?;
+    let rows = statement
+        .query_map(rusqlite::params_from_iter(task_ids.iter()), |row| {
+            Ok(SnapshotQueueEntry {
+                task_id: row.get(0)?,
+                position: row.get(1)?,
+            })
+        })
+        .map_err(db::storage_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db::storage_error)?;
+    Ok(rows)
+}
+
+fn snapshot_hierarchy_for_ids(
+    connection: &Connection,
+    task_ids: &[String],
+) -> Result<Vec<SnapshotHierarchyEntry>, DomainError> {
+    if task_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT task_id, parent_task_id, position FROM task_hierarchy
+             WHERE task_id IN ({}) ORDER BY task_id",
+            placeholders(task_ids.len())
+        ))
+        .map_err(db::storage_error)?;
+    let rows = statement
+        .query_map(rusqlite::params_from_iter(task_ids.iter()), |row| {
+            Ok(SnapshotHierarchyEntry {
+                task_id: row.get(0)?,
+                parent_task_id: row.get(1)?,
+                position: row.get(2)?,
+            })
+        })
+        .map_err(db::storage_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db::storage_error)?;
+    Ok(rows)
+}
+
+fn snapshot_sessions_for_ids(
+    connection: &Connection,
+    task_ids: &[String],
+    open_only: bool,
+) -> Result<Vec<SnapshotSession>, DomainError> {
+    if task_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let open_filter = if open_only {
+        " AND ended_at IS NULL"
+    } else {
+        ""
+    };
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT id, task_id, started_at, ended_at, end_reason, operation_id
+             FROM work_sessions WHERE task_id IN ({}){} ORDER BY id",
+            placeholders(task_ids.len()),
+            open_filter
+        ))
+        .map_err(db::storage_error)?;
+    let rows = statement
+        .query_map(rusqlite::params_from_iter(task_ids.iter()), |row| {
+            Ok(SnapshotSession {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                started_at: row.get(2)?,
+                ended_at: row.get(3)?,
+                end_reason: row.get(4)?,
+                operation_id: row.get(5)?,
+            })
+        })
+        .map_err(db::storage_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db::storage_error)?;
+    Ok(rows)
+}
+
+fn snapshot_events_for_ids(
+    connection: &Connection,
+    task_ids: &[String],
+) -> Result<Vec<SnapshotEvent>, DomainError> {
+    if task_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT id, task_id, operation_id, event_type, occurred_at, payload
+             FROM task_events WHERE task_id IN ({}) ORDER BY id",
+            placeholders(task_ids.len())
+        ))
+        .map_err(db::storage_error)?;
+    let rows = statement
+        .query_map(rusqlite::params_from_iter(task_ids.iter()), |row| {
+            Ok(SnapshotEvent {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                operation_id: row.get(2)?,
+                event_type: row.get(3)?,
+                occurred_at: row.get(4)?,
+                payload: row.get(5)?,
+            })
+        })
+        .map_err(db::storage_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db::storage_error)?;
+    Ok(rows)
+}
+
+fn capture_undo_delta_v2(
+    connection: &Connection,
+    task_scope_ids: &[String],
+    queue_scope_ids: &[String],
+    hierarchy_scope_ids: &[String],
+    session_task_ids: &[String],
+    open_sessions_only: bool,
+    event_task_ids: &[String],
+) -> Result<UndoDeltaV2, DomainError> {
+    let task_scope_ids = normalized_ids(task_scope_ids);
+    let queue_scope_ids = normalized_ids(queue_scope_ids);
+    let hierarchy_scope_ids = normalized_ids(hierarchy_scope_ids);
+    let session_task_ids = normalized_ids(session_task_ids);
+    let event_task_ids = normalized_ids(event_task_ids);
+    Ok(UndoDeltaV2 {
+        format_version: 2,
+        tasks: snapshot_tasks_for_ids(connection, &task_scope_ids)?,
+        queue_entries: snapshot_queue_for_ids(connection, &queue_scope_ids)?,
+        hierarchy_entries: snapshot_hierarchy_for_ids(connection, &hierarchy_scope_ids)?,
+        sessions: snapshot_sessions_for_ids(connection, &session_task_ids, open_sessions_only)?,
+        events: snapshot_events_for_ids(connection, &event_task_ids)?,
+        task_scope_ids,
+        queue_scope_ids,
+        hierarchy_scope_ids,
+    })
 }
 
 fn transaction(connection: &mut Connection) -> Result<Transaction<'_>, DomainError> {
@@ -88,6 +303,7 @@ fn transaction(connection: &mut Connection) -> Result<Transaction<'_>, DomainErr
         .map_err(db::storage_error)
 }
 
+#[cfg(test)]
 fn capture_observable_snapshot(connection: &Connection) -> Result<ObservableSnapshot, DomainError> {
     let tasks = {
         let mut statement = connection
@@ -198,13 +414,13 @@ fn record_undo_entry(
     label: &str,
     committed_at: &str,
     affected_task_ids: &[String],
-    snapshot: &ObservableSnapshot,
+    payload: &UndoDeltaV2,
 ) -> Result<i64, DomainError> {
     let affected_json = serde_json::to_string(affected_task_ids).map_err(|_| {
         DomainError::new("persistence-failure", "Undo journal could not be encoded")
     })?;
-    let snapshot_json = serde_json::to_string(snapshot).map_err(|_| {
-        DomainError::new("persistence-failure", "Undo snapshot could not be encoded")
+    let snapshot_json = serde_json::to_string(payload).map_err(|_| {
+        DomainError::new("persistence-failure", "Undo payload could not be encoded")
     })?;
     transaction
         .execute(
@@ -279,7 +495,7 @@ fn undo_status_in(connection: &Connection) -> Result<UndoStatus, DomainError> {
 fn latest_journal_entry(connection: &Connection) -> Result<Option<JournalEntry>, DomainError> {
     let raw = connection
         .query_row(
-            "SELECT operation_token, affected_task_ids,
+            "SELECT operation_token, operation_id, affected_task_ids,
                 snapshot_json, expected_source_revision, expected_hierarchy_revision,
                 expected_queue_revision
          FROM undo_journal ORDER BY sequence DESC LIMIT 1",
@@ -289,9 +505,10 @@ fn latest_journal_entry(connection: &Connection) -> Result<Option<JournalEntry>,
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
                 ))
             },
         )
@@ -300,6 +517,7 @@ fn latest_journal_entry(connection: &Connection) -> Result<Option<JournalEntry>,
     raw.map(
         |(
             operation_token,
+            operation_id,
             affected_json,
             snapshot_json,
             expected_source_revision,
@@ -309,13 +527,23 @@ fn latest_journal_entry(connection: &Connection) -> Result<Option<JournalEntry>,
             let affected_task_ids = serde_json::from_str(&affected_json).map_err(|_| {
                 DomainError::new("persistence-failure", "Stored undo journal is invalid")
             })?;
-            let snapshot = serde_json::from_str(&snapshot_json).map_err(|_| {
-                DomainError::new("persistence-failure", "Stored undo snapshot is invalid")
-            })?;
+            let payload = match serde_json::from_str::<UndoDeltaV2>(&snapshot_json) {
+                Ok(delta) if delta.format_version == 2 => StoredUndoPayload::DeltaV2(delta),
+                Ok(_) => {
+                    return Err(DomainError::new(
+                        "persistence-failure",
+                        "Stored undo payload version is unsupported",
+                    ));
+                }
+                Err(_) => StoredUndoPayload::Legacy(serde_json::from_str(&snapshot_json).map_err(
+                    |_| DomainError::new("persistence-failure", "Stored undo snapshot is invalid"),
+                )?),
+            };
             Ok(JournalEntry {
                 operation_token,
+                operation_id,
                 affected_task_ids,
-                snapshot,
+                payload,
                 expected_source_revision,
                 expected_hierarchy_revision,
                 expected_queue_revision,
@@ -415,6 +643,212 @@ fn restore_observable_snapshot(
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![row.id, row.task_id, row.operation_id, row.event_type, row.occurred_at, row.payload],
         ).map_err(db::storage_error)?;
+    }
+    Ok(())
+}
+
+fn delete_rows_for_task_ids(
+    transaction: &Transaction<'_>,
+    table: &str,
+    column: &str,
+    task_ids: &[String],
+) -> Result<(), DomainError> {
+    if task_ids.is_empty() {
+        return Ok(());
+    }
+    transaction
+        .execute(
+            &format!(
+                "DELETE FROM {table} WHERE {column} IN ({})",
+                placeholders(task_ids.len())
+            ),
+            rusqlite::params_from_iter(task_ids.iter()),
+        )
+        .map_err(db::storage_error)?;
+    Ok(())
+}
+
+fn restore_undo_delta_v2(
+    transaction: &Transaction<'_>,
+    delta: &UndoDeltaV2,
+    affected_task_ids: &[String],
+    operation_id: &str,
+) -> Result<(), DomainError> {
+    if delta.format_version != 2 {
+        return Err(DomainError::new(
+            "persistence-failure",
+            "Stored undo payload version is unsupported",
+        ));
+    }
+    let affected = affected_task_ids.iter().cloned().collect::<HashSet<_>>();
+    let stored_task_ids = delta
+        .tasks
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<HashSet<_>>();
+    let removed_task_ids = delta
+        .task_scope_ids
+        .iter()
+        .filter(|task_id| !stored_task_ids.contains(task_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // Every reversible operation writes its new events under one operation
+    // identifier. Removing only those rows avoids rewriting retained history.
+    transaction
+        .execute(
+            "DELETE FROM task_events WHERE operation_id = ?1",
+            [operation_id],
+        )
+        .map_err(db::storage_error)?;
+    delete_rows_for_task_ids(
+        transaction,
+        "task_hierarchy",
+        "task_id",
+        &delta.hierarchy_scope_ids,
+    )?;
+    delete_rows_for_task_ids(
+        transaction,
+        "queue_entries",
+        "task_id",
+        &delta.queue_scope_ids,
+    )?;
+    // A create inverse has no prior task row. Clear any dependent rows before
+    // removing that created identity; revision conflict checks ensure no later
+    // committed operation can be lost here.
+    delete_rows_for_task_ids(transaction, "task_events", "task_id", &removed_task_ids)?;
+    delete_rows_for_task_ids(transaction, "work_sessions", "task_id", &removed_task_ids)?;
+    delete_rows_for_task_ids(transaction, "queue_entries", "task_id", &removed_task_ids)?;
+    delete_rows_for_task_ids(transaction, "task_hierarchy", "task_id", &removed_task_ids)?;
+    delete_rows_for_task_ids(transaction, "tasks", "id", &removed_task_ids)?;
+
+    let mut restored_task_ids = HashSet::new();
+    for task in &delta.tasks {
+        let current_version = transaction
+            .query_row(
+                "SELECT version FROM tasks WHERE id = ?1",
+                [&task.id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(db::storage_error)?;
+        let monotonic_version = current_version.unwrap_or(task.version).max(task.version);
+        let version = if affected.contains(&task.id) {
+            monotonic_version.checked_add(1).ok_or_else(|| {
+                DomainError::new("persistence-failure", "Task version is exhausted")
+            })?
+        } else {
+            monotonic_version
+        };
+        transaction
+            .execute(
+                "INSERT INTO tasks (id, title, state, created_at, memo, completed_at, version)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(id) DO UPDATE SET
+                   title = excluded.title,
+                   state = excluded.state,
+                   created_at = excluded.created_at,
+                   memo = excluded.memo,
+                   completed_at = excluded.completed_at,
+                   version = excluded.version",
+                params![
+                    task.id,
+                    task.title,
+                    task.state,
+                    task.created_at,
+                    task.memo,
+                    task.completed_at,
+                    version
+                ],
+            )
+            .map_err(db::storage_error)?;
+        restored_task_ids.insert(task.id.as_str());
+    }
+
+    for row in &delta.hierarchy_entries {
+        transaction
+            .execute(
+                "INSERT INTO task_hierarchy (task_id, parent_task_id, position)
+                 VALUES (?1, ?2, ?3)",
+                params![row.task_id, row.parent_task_id, row.position],
+            )
+            .map_err(db::storage_error)?;
+    }
+    for row in &delta.queue_entries {
+        transaction
+            .execute(
+                "INSERT INTO queue_entries (task_id, position) VALUES (?1, ?2)",
+                params![row.task_id, row.position],
+            )
+            .map_err(db::storage_error)?;
+    }
+    for row in &delta.sessions {
+        transaction
+            .execute(
+                "INSERT INTO work_sessions
+                 (id, task_id, started_at, ended_at, end_reason, operation_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(id) DO UPDATE SET
+                   task_id = excluded.task_id,
+                   started_at = excluded.started_at,
+                   ended_at = excluded.ended_at,
+                   end_reason = excluded.end_reason,
+                   operation_id = excluded.operation_id",
+                params![
+                    row.id,
+                    row.task_id,
+                    row.started_at,
+                    row.ended_at,
+                    row.end_reason,
+                    row.operation_id
+                ],
+            )
+            .map_err(db::storage_error)?;
+    }
+    for row in &delta.events {
+        transaction
+            .execute(
+                "INSERT INTO task_events
+                 (id, task_id, operation_id, event_type, occurred_at, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    row.id,
+                    row.task_id,
+                    row.operation_id,
+                    row.event_type,
+                    row.occurred_at,
+                    row.payload
+                ],
+            )
+            .map_err(db::storage_error)?;
+    }
+
+    // Move inverses restore hierarchy rows but intentionally do not copy task
+    // records. Preserve the existing contract that every affected task version
+    // advances across an undo without touching unrelated tasks.
+    for task_id in affected_task_ids {
+        if restored_task_ids.contains(task_id.as_str()) || removed_task_ids.contains(task_id) {
+            continue;
+        }
+        let current_version = transaction
+            .query_row(
+                "SELECT version FROM tasks WHERE id = ?1",
+                [task_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(db::storage_error)?;
+        if let Some(current_version) = current_version {
+            let version = current_version.checked_add(1).ok_or_else(|| {
+                DomainError::new("persistence-failure", "Task version is exhausted")
+            })?;
+            transaction
+                .execute(
+                    "UPDATE tasks SET version = ?1 WHERE id = ?2",
+                    params![version, task_id],
+                )
+                .map_err(db::storage_error)?;
+        }
     }
     Ok(())
 }
@@ -599,12 +1033,13 @@ pub fn rename_task(
     let effective = canonical(effective_dt);
     let operation_id = db::new_id();
     let transaction = transaction(connection)?;
-    let undo_snapshot = capture_observable_snapshot(&transaction)?;
     let task = task_in_transaction(&transaction, task_id)?;
     if task.version != expected_version {
         return Err(DomainError::new("stale-version", "Task version is stale"));
     }
     validate_task_effective_instant(&transaction, task_id, effective_dt)?;
+    let task_scope = vec![task_id.to_owned()];
+    let undo_payload = capture_undo_delta_v2(&transaction, &task_scope, &[], &[], &[], false, &[])?;
     db::update_task_title(&transaction, task_id, expected_version, &title)?;
     db::insert_event(
         &transaction,
@@ -622,7 +1057,7 @@ pub fn rename_task(
         &format!("「{}」の名前変更", task.title),
         &effective,
         &[task_id.to_owned()],
-        &undo_snapshot,
+        &undo_payload,
     )?;
     transaction.commit().map_err(db::storage_error)?;
     let _ = source_revision;
@@ -665,7 +1100,8 @@ pub fn update_task_memo(
         });
     }
 
-    let undo_snapshot = capture_observable_snapshot(&transaction)?;
+    let task_scope = vec![task_id.to_owned()];
+    let undo_payload = capture_undo_delta_v2(&transaction, &task_scope, &[], &[], &[], false, &[])?;
     db::update_task_memo(&transaction, task_id, expected_task_version, memo)?;
     db::insert_event(
         &transaction,
@@ -686,7 +1122,7 @@ pub fn update_task_memo(
         &format!("「{}」のメモを更新", task.title),
         &effective,
         &[task_id.to_owned()],
-        &undo_snapshot,
+        &undo_payload,
     )?;
     transaction.commit().map_err(db::storage_error)?;
     Ok(ReversibleChangeResult {
@@ -1675,7 +2111,6 @@ fn create_task_in_hierarchy_internal(
     ensure_tree_capacity(connection)?;
     let operation_id = db::new_id();
     let transaction = transaction(connection)?;
-    let undo_snapshot = capture_observable_snapshot(&transaction)?;
     let current_revision = db::hierarchy_revision(&transaction)?;
     if current_revision != expected_hierarchy_revision {
         return Err(DomainError::new(
@@ -1687,6 +2122,21 @@ fn create_task_in_hierarchy_internal(
     validate_parent_and_anchor(&rows, target_parent_task_id, before_task_id, None, true)?;
     validate_resulting_depth(&rows, target_parent_task_id, None)?;
     let task_id = db::new_id();
+    let mut hierarchy_scope = rows
+        .iter()
+        .filter(|row| row.parent_task_id.as_deref() == target_parent_task_id)
+        .map(|row| row.task.id.clone())
+        .collect::<Vec<_>>();
+    hierarchy_scope.push(task_id.clone());
+    let undo_payload = capture_undo_delta_v2(
+        &transaction,
+        std::slice::from_ref(&task_id),
+        std::slice::from_ref(&task_id),
+        &hierarchy_scope,
+        &[],
+        false,
+        &[],
+    )?;
     db::insert_task(&transaction, &task_id, &title, &effective)?;
     db::enqueue_task(&transaction, &task_id)?;
     let position = db::next_hierarchy_position(&transaction, target_parent_task_id)?;
@@ -1742,7 +2192,7 @@ fn create_task_in_hierarchy_internal(
         &format!("「{}」を作成", title),
         &effective,
         std::slice::from_ref(&task_id),
-        &undo_snapshot,
+        &undo_payload,
     )?;
     transaction.commit().map_err(db::storage_error)?;
     rows_after.clear();
@@ -1788,7 +2238,6 @@ pub fn move_task_in_hierarchy(
     let effective = canonical(effective_dt);
     let operation_id = db::new_id();
     let transaction = transaction(connection)?;
-    let undo_snapshot = capture_observable_snapshot(&transaction)?;
     let current_revision = db::hierarchy_revision(&transaction)?;
     if current_revision != expected_hierarchy_revision {
         return Err(DomainError::new(
@@ -1817,6 +2266,9 @@ pub fn move_task_in_hierarchy(
     )?;
     validate_resulting_depth(&rows, target_parent_task_id, Some(task_id))?;
     let orders = placement_orders(&rows, Some(task_id), target_parent_task_id, before_task_id)?;
+    let hierarchy_scope = orders.values().flatten().cloned().collect::<Vec<_>>();
+    let undo_payload =
+        capture_undo_delta_v2(&transaction, &[], &[], &hierarchy_scope, &[], false, &[])?;
     apply_hierarchy_orders(&transaction, &orders)?;
     let next_hierarchy_revision = current_revision.checked_add(1).ok_or_else(|| {
         DomainError::new("persistence-failure", "Hierarchy revision is exhausted")
@@ -1843,7 +2295,7 @@ pub fn move_task_in_hierarchy(
         &format!("「{}」を移動", source.task.title),
         &effective,
         &subtree_ids,
-        &undo_snapshot,
+        &undo_payload,
     )?;
     transaction.commit().map_err(db::storage_error)?;
     let changed_entries = hierarchy_entries_for_ids(connection, &subtree_ids)?;
@@ -1872,7 +2324,6 @@ pub fn complete_hierarchy_task(
     let effective = canonical(effective_dt);
     let operation_id = db::new_id();
     let transaction = transaction(connection)?;
-    let undo_snapshot = capture_observable_snapshot(&transaction)?;
     let task = task_in_transaction(&transaction, task_id)?;
     if task.version != expected_task_version {
         return Err(DomainError::new(
@@ -1886,6 +2337,16 @@ pub fn complete_hierarchy_task(
             "Task is already completed",
         ));
     }
+    let task_scope = vec![task_id.to_owned()];
+    let undo_payload = capture_undo_delta_v2(
+        &transaction,
+        &task_scope,
+        &task_scope,
+        &[],
+        &task_scope,
+        true,
+        &[],
+    )?;
     let hierarchy_revision = db::hierarchy_revision(&transaction)?;
     let (updated, queue_changed) = complete_task_in_transaction(
         &transaction,
@@ -1907,7 +2368,7 @@ pub fn complete_hierarchy_task(
         &format!("「{}」を完了", task.title),
         &effective,
         &[task_id.to_owned()],
-        &undo_snapshot,
+        &undo_payload,
     )?;
     transaction.commit().map_err(db::storage_error)?;
     let changed_entries = hierarchy_entries_for_ids(connection, &[task_id.to_owned()])?;
@@ -1936,7 +2397,6 @@ pub fn reopen_hierarchy_task(
     let effective = canonical(effective_dt);
     let operation_id = db::new_id();
     let transaction = transaction(connection)?;
-    let undo_snapshot = capture_observable_snapshot(&transaction)?;
     let rows = db::hierarchy_task_rows(&transaction)?;
     let target = hierarchy_row(&rows, task_id)?;
     if target.task.version != expected_task_version {
@@ -1966,6 +2426,15 @@ pub fn reopen_hierarchy_task(
         }
         ensure_no_queue_member(&transaction, changed_id)?;
     }
+    let undo_payload = capture_undo_delta_v2(
+        &transaction,
+        &changed_ids,
+        &changed_ids,
+        &[],
+        &[],
+        false,
+        &[],
+    )?;
     for changed_id in &changed_ids {
         let current = hierarchy_row(&rows, changed_id)?;
         db::update_task_state(
@@ -2003,7 +2472,7 @@ pub fn reopen_hierarchy_task(
         &format!("「{}」を再開", target.task.title),
         &effective,
         &changed_ids,
-        &undo_snapshot,
+        &undo_payload,
     )?;
     transaction.commit().map_err(db::storage_error)?;
     let changed_tasks = changed_ids
@@ -2059,7 +2528,15 @@ pub fn delete_task_subtree(
     for affected_id in &affected_task_ids {
         validate_task_effective_instant(&transaction, affected_id, effective_dt)?;
     }
-    let undo_snapshot = capture_observable_snapshot(&transaction)?;
+    let undo_payload = capture_undo_delta_v2(
+        &transaction,
+        &affected_task_ids,
+        &affected_task_ids,
+        &affected_task_ids,
+        &affected_task_ids,
+        false,
+        &affected_task_ids,
+    )?;
     let queue_changed: bool = transaction
         .query_row(
             &format!(
@@ -2116,7 +2593,7 @@ pub fn delete_task_subtree(
         &format!("「{}」を削除", root.task.title),
         &effective,
         &affected_task_ids,
-        &undo_snapshot,
+        &undo_payload,
     )?;
     transaction.commit().map_err(db::storage_error)?;
     Ok(ReversibleChangeResult {
@@ -2163,7 +2640,17 @@ pub fn undo_last_task_operation(
             "Current task state no longer matches the undo operation",
         ));
     }
-    restore_observable_snapshot(&transaction, &entry.snapshot, &entry.affected_task_ids)?;
+    match &entry.payload {
+        StoredUndoPayload::DeltaV2(delta) => restore_undo_delta_v2(
+            &transaction,
+            delta,
+            &entry.affected_task_ids,
+            &entry.operation_id,
+        )?,
+        StoredUndoPayload::Legacy(snapshot) => {
+            restore_observable_snapshot(&transaction, snapshot, &entry.affected_task_ids)?;
+        }
+    }
     transaction
         .execute(
             "INSERT INTO undo_audit (operation_id, undone_operation_token, undone_at)
@@ -3468,6 +3955,80 @@ mod tests {
                 .session_count,
             0
         );
+    }
+
+    #[test]
+    fn queue_rebalance_handles_reachable_negative_and_zero_positions() {
+        let mut connection = connection();
+        let tasks = (0..14)
+            .map(|index| create(&mut connection, &format!("task-{index}"), 0))
+            .collect::<Vec<_>>();
+        let mut revision = get_next_queue(&connection, None, 20)
+            .unwrap()
+            .queue_revision;
+
+        // Establish -1024 and 0 before the original first task.
+        for (minute, task_index, anchor_index) in [(1, 13, 0), (2, 12, 13)] {
+            revision = move_queued_task(
+                &mut connection,
+                &tasks[task_index].id,
+                Some(&tasks[anchor_index].id),
+                revision,
+                &at(minute),
+            )
+            .expect("front move")
+            .queue_revision;
+        }
+
+        // Repeatedly insert immediately before the zero-position task. The
+        // available negative gap halves until -1 and 0 are adjacent.
+        for (offset, task_index) in (2..=11).rev().enumerate() {
+            revision = move_queued_task(
+                &mut connection,
+                &tasks[task_index].id,
+                Some(&tasks[13].id),
+                revision,
+                &at(offset as i64 + 3),
+            )
+            .expect("negative-gap move")
+            .queue_revision;
+        }
+
+        let before_rebalance = get_next_queue(&connection, None, 20).unwrap();
+        assert!(before_rebalance
+            .entries
+            .iter()
+            .any(|entry| entry.position == -1));
+        assert!(before_rebalance
+            .entries
+            .iter()
+            .any(|entry| entry.position == 0));
+
+        // One more supported move into the exhausted gap must rebalance
+        // atomically rather than exposing a UNIQUE(position) failure.
+        let moved = move_queued_task(
+            &mut connection,
+            &tasks[1].id,
+            Some(&tasks[13].id),
+            revision,
+            &at(13),
+        )
+        .expect("rebalance move");
+        let queue = get_next_queue(&connection, None, 20).unwrap();
+        let expected = (2..=12)
+            .rev()
+            .chain([1, 13, 0])
+            .map(|index| tasks[index].id.clone())
+            .collect::<Vec<_>>();
+        let unique_positions = queue
+            .entries
+            .iter()
+            .map(|entry| entry.position)
+            .collect::<HashSet<_>>();
+
+        assert_eq!(queue.task_ids, expected);
+        assert_eq!(unique_positions.len(), queue.entries.len());
+        assert_eq!(queue.queue_revision, moved.queue_revision);
     }
 
     #[test]
@@ -5561,5 +6122,335 @@ mod tests {
             )
         );
         assert_eq!(get_undo_status(&connection).unwrap(), status);
+    }
+
+    #[test]
+    fn row_delta_undo_does_not_rewrite_unrelated_history() {
+        let mut connection = connection();
+        let unrelated = create(&mut connection, "unrelated", 0);
+        let active = start_task(&mut connection, &unrelated.id, unrelated.version, &at(1)).unwrap();
+        pause_task(
+            &mut connection,
+            &unrelated.id,
+            active.changed_tasks[0].version,
+            None,
+            &at(2),
+        )
+        .unwrap();
+        let target = create(&mut connection, "target", 3);
+        let unrelated_before = get_task(&connection, &unrelated.id).unwrap();
+        let unrelated_sessions_before =
+            get_task_sessions(&connection, &unrelated.id, None, 20).unwrap();
+        let unrelated_event_count_before = db::task_history_events(&connection, &unrelated.id)
+            .unwrap()
+            .len();
+
+        rename_task(
+            &mut connection,
+            &target.id,
+            "renamed target",
+            target.version,
+            &at(4),
+        )
+        .unwrap();
+        let (token, payload_json): (String, String) = connection
+            .query_row(
+                "SELECT operation_token, snapshot_json FROM undo_journal
+                 ORDER BY sequence DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let payload: UndoDeltaV2 = serde_json::from_str(&payload_json).unwrap();
+        assert_eq!(payload.format_version, 2);
+        assert_eq!(payload.tasks.len(), 1);
+        assert_eq!(payload.tasks[0].id, target.id);
+        assert!(payload.sessions.is_empty());
+        assert!(payload.events.is_empty());
+        assert!(!payload_json.contains(&unrelated.id));
+
+        connection
+            .execute_batch(&format!(
+                "CREATE TRIGGER reject_unrelated_task_update BEFORE UPDATE ON tasks
+                   WHEN OLD.id = '{id}' BEGIN SELECT RAISE(ABORT, 'unrelated task updated'); END;
+                 CREATE TRIGGER reject_unrelated_session_delete BEFORE DELETE ON work_sessions
+                   WHEN OLD.task_id = '{id}' BEGIN SELECT RAISE(ABORT, 'unrelated session deleted'); END;
+                 CREATE TRIGGER reject_unrelated_event_delete BEFORE DELETE ON task_events
+                   WHEN OLD.task_id = '{id}' BEGIN SELECT RAISE(ABORT, 'unrelated event deleted'); END;",
+                id = unrelated.id
+            ))
+            .unwrap();
+        undo_last_task_operation(&mut connection, &token, &at(5)).unwrap();
+        assert_eq!(get_task(&connection, &target.id).unwrap().title, "target");
+        assert_eq!(
+            get_task(&connection, &unrelated.id).unwrap(),
+            unrelated_before
+        );
+        assert_eq!(
+            get_task_sessions(&connection, &unrelated.id, None, 20)
+                .unwrap()
+                .sessions,
+            unrelated_sessions_before.sessions
+        );
+        assert_eq!(
+            db::task_history_events(&connection, &unrelated.id)
+                .unwrap()
+                .len(),
+            unrelated_event_count_before
+        );
+    }
+
+    #[test]
+    fn delete_delta_contains_only_the_affected_subtree() {
+        let mut connection = connection();
+        let unrelated = create(&mut connection, "unrelated", 0);
+        let parent =
+            create_task_in_hierarchy(&mut connection, "parent", None, None, 1, &at(1)).unwrap();
+        let parent_id = parent.changed_tasks[0].id.clone();
+        let child = create_task_in_hierarchy(
+            &mut connection,
+            "child",
+            Some(&parent_id),
+            None,
+            parent.hierarchy_revision,
+            &at(2),
+        )
+        .unwrap();
+        let child_id = child.changed_tasks[0].id.clone();
+        let active = start_task(
+            &mut connection,
+            &child_id,
+            child.changed_tasks[0].version,
+            &at(3),
+        )
+        .unwrap();
+        pause_task(
+            &mut connection,
+            &child_id,
+            active.changed_tasks[0].version,
+            None,
+            &at(4),
+        )
+        .unwrap();
+        let unrelated_before = get_task(&connection, &unrelated.id).unwrap();
+        let forest = get_task_forest(&connection, 20).unwrap();
+        let parent_version = get_task(&connection, &parent_id).unwrap().version;
+        let deleted = delete_task_subtree(
+            &mut connection,
+            &parent_id,
+            parent_version,
+            forest.hierarchy_revision,
+            &at(5),
+        )
+        .unwrap();
+        let payload_json: String = connection
+            .query_row(
+                "SELECT snapshot_json FROM undo_journal ORDER BY sequence DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let payload: UndoDeltaV2 = serde_json::from_str(&payload_json).unwrap();
+        let subtree = HashSet::from([parent_id.clone(), child_id.clone()]);
+        assert_eq!(payload.tasks.len(), 2);
+        assert!(payload.tasks.iter().all(|task| subtree.contains(&task.id)));
+        assert!(payload
+            .sessions
+            .iter()
+            .all(|session| subtree.contains(&session.task_id)));
+        assert!(payload.events.iter().all(|event| event
+            .task_id
+            .as_ref()
+            .is_some_and(|task_id| subtree.contains(task_id))));
+        assert!(!payload_json.contains(&unrelated.id));
+
+        undo_last_task_operation(
+            &mut connection,
+            deleted.undo_status.operation_token.as_deref().unwrap(),
+            &at(6),
+        )
+        .unwrap();
+        assert_eq!(
+            get_task(&connection, &unrelated.id).unwrap(),
+            unrelated_before
+        );
+        assert_eq!(get_task_forest(&connection, 20).unwrap().entries.len(), 3);
+    }
+
+    #[test]
+    fn bounded_row_deltas_do_not_copy_retained_unrelated_history() {
+        let mut connection = connection();
+        let unrelated = create(&mut connection, "history source", 0);
+        let active = start_task(&mut connection, &unrelated.id, unrelated.version, &at(1)).unwrap();
+        pause_task(
+            &mut connection,
+            &unrelated.id,
+            active.changed_tasks[0].version,
+            None,
+            &at(2),
+        )
+        .unwrap();
+        let session_id: String = connection
+            .query_row(
+                "SELECT id FROM work_sessions WHERE task_id = ?1",
+                [&unrelated.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let target = create(&mut connection, "memo target", 3);
+        let mut version = target.version;
+        for index in 0..51 {
+            let changed = update_task_memo(
+                &mut connection,
+                &target.id,
+                &format!("memo-{index}"),
+                version,
+                &at(4 + index),
+            )
+            .unwrap();
+            version = get_task(&connection, &target.id).unwrap().version;
+            assert_eq!(changed.affected_task_ids, vec![target.id.clone()]);
+        }
+        let mut statement = connection
+            .prepare("SELECT snapshot_json FROM undo_journal ORDER BY sequence")
+            .unwrap();
+        let payloads = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(payloads.len(), 50);
+        for payload_json in payloads {
+            let payload: UndoDeltaV2 = serde_json::from_str(&payload_json).unwrap();
+            assert!(payload.sessions.is_empty());
+            assert!(payload.events.is_empty());
+            assert!(!payload_json.contains(&session_id));
+            assert!(!payload_json.contains(&unrelated.id));
+        }
+    }
+
+    #[test]
+    fn completion_delta_restores_the_existing_open_session() {
+        let mut connection = connection();
+        let task = create(&mut connection, "active", 0);
+        let started = start_task(&mut connection, &task.id, task.version, &at(1)).unwrap();
+        let completed = complete_hierarchy_task(
+            &mut connection,
+            &task.id,
+            started.changed_tasks[0].version,
+            &at(2),
+        )
+        .unwrap();
+        let payload_json: String = connection
+            .query_row(
+                "SELECT snapshot_json FROM undo_journal ORDER BY sequence DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let payload: UndoDeltaV2 = serde_json::from_str(&payload_json).unwrap();
+        assert_eq!(payload.sessions.len(), 1);
+        assert!(payload.sessions[0].ended_at.is_none());
+        let token = get_undo_status(&connection)
+            .unwrap()
+            .operation_token
+            .unwrap();
+        undo_last_task_operation(&mut connection, &token, &at(3)).unwrap();
+        assert_eq!(
+            get_task(&connection, &task.id).unwrap().state,
+            TaskState::Active
+        );
+        let sessions = get_task_sessions(&connection, &task.id, None, 20).unwrap();
+        assert_eq!(sessions.sessions.len(), 1);
+        assert!(sessions.sessions[0].ended_at.is_none());
+        assert!(
+            completed.changed_tasks[0].version < get_task(&connection, &task.id).unwrap().version
+        );
+    }
+
+    #[test]
+    fn move_delta_restores_exact_sibling_positions_without_history_copies() {
+        let mut connection = connection();
+        let first = create(&mut connection, "first", 0);
+        let second = create(&mut connection, "second", 1);
+        let third = create(&mut connection, "third", 2);
+        let before = get_task_forest(&connection, 20).unwrap();
+        let before_positions = before
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.task.id.clone(),
+                    entry.parent_task_id.clone(),
+                    entry.position,
+                )
+            })
+            .collect::<Vec<_>>();
+        move_task_in_hierarchy(
+            &mut connection,
+            &third.id,
+            None,
+            Some(&first.id),
+            before.hierarchy_revision,
+            &at(3),
+        )
+        .unwrap();
+        let payload_json: String = connection
+            .query_row(
+                "SELECT snapshot_json FROM undo_journal ORDER BY sequence DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let payload: UndoDeltaV2 = serde_json::from_str(&payload_json).unwrap();
+        assert!(payload.tasks.is_empty());
+        assert!(payload.sessions.is_empty());
+        assert!(payload.events.is_empty());
+        assert_eq!(payload.hierarchy_entries.len(), 3);
+        let token = get_undo_status(&connection)
+            .unwrap()
+            .operation_token
+            .unwrap();
+        undo_last_task_operation(&mut connection, &token, &at(4)).unwrap();
+        let after_positions = get_task_forest(&connection, 20)
+            .unwrap()
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.task.id.clone(),
+                    entry.parent_task_id.clone(),
+                    entry.position,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(after_positions, before_positions);
+        assert_eq!(
+            get_task(&connection, &second.id).unwrap().version,
+            second.version
+        );
+    }
+
+    #[test]
+    fn legacy_full_snapshot_entries_still_restore() {
+        let mut connection = connection();
+        let task = create(&mut connection, "legacy title", 0);
+        let legacy_snapshot = capture_observable_snapshot(&connection).unwrap();
+        rename_task(&mut connection, &task.id, "new title", task.version, &at(1)).unwrap();
+        let token = get_undo_status(&connection)
+            .unwrap()
+            .operation_token
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE undo_journal SET snapshot_json = ?1 WHERE operation_token = ?2",
+                params![serde_json::to_string(&legacy_snapshot).unwrap(), token],
+            )
+            .unwrap();
+        undo_last_task_operation(&mut connection, &token, &at(2)).unwrap();
+        assert_eq!(
+            get_task(&connection, &task.id).unwrap().title,
+            "legacy title"
+        );
     }
 }

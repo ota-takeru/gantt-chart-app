@@ -22,7 +22,7 @@ import {
   type WorkSessionPage,
 } from "./types";
 
-export type PreviewVariant = "typical" | "dense" | "no-active" | "empty" | "error" | "only-completed" | "deep";
+export type PreviewVariant = "typical" | "dense" | "no-active" | "empty" | "error" | "only-completed" | "deep" | "pocket-window";
 
 const PREVIEW_NOW = "2026-08-23T06:12:00.000Z";
 const DEFAULT_DATE = "2026-08-23T00:00:00.000Z";
@@ -141,6 +141,32 @@ function buildDense(): StaticFixture {
     }
   }
   return buildFixture(tasks, [], events, 902, parentById);
+}
+
+function buildPocketWindow(): StaticFixture {
+  const root = makeTask("pocket-window-root", "600件の完了履歴を確認する", "completed", 2, {
+    createdAt: "2026-08-01T00:00:00.000Z",
+    completedAt: "2026-08-23T06:00:00.000Z",
+  });
+  const tasks: TaskSnapshot[] = [root];
+  const events: LifecycleEvent[] = [makeEvent("pocket-window-root-event", root.id, "task-completed", root.completedAt ?? PREVIEW_NOW)];
+  const parentById: Record<string, string | undefined> = {};
+  for (let index = 0; index < 599; index += 1) {
+    const child = makeTask(
+      `pocket-window-member-${index + 1}`,
+      `完了履歴メンバー ${String(index + 1).padStart(3, "0")}`,
+      "completed",
+      1,
+      {
+        createdAt: new Date(Date.parse("2026-08-01T00:00:00.000Z") + (index + 1) * 30 * 60 * 1000).toISOString(),
+        completedAt: new Date(Date.parse("2026-08-23T06:00:00.000Z") - (598 - index) * 60 * 1000).toISOString(),
+      },
+    );
+    tasks.push(child);
+    parentById[child.id] = root.id;
+    events.push(makeEvent(`pocket-window-member-event-${index + 1}`, child.id, "task-completed", child.completedAt ?? PREVIEW_NOW));
+  }
+  return buildFixture(tasks, [], events, 1200, parentById);
 }
 
 function buildDeep(): StaticFixture {
@@ -538,12 +564,12 @@ class StaticFixtureTaskApi implements TaskApi {
 }
 
 export function createFixtureTaskApi(variant: PreviewVariant = "empty"): TaskApi {
-  const fixture = variant === "empty" ? buildFixture([], [], [], 0) : variant === "dense" ? buildDense() : variant === "no-active" ? buildNoActive() : variant === "only-completed" ? buildOnlyCompleted() : variant === "deep" ? buildDeep() : buildTypical();
+  const fixture = variant === "empty" ? buildFixture([], [], [], 0) : variant === "dense" ? buildDense() : variant === "no-active" ? buildNoActive() : variant === "only-completed" ? buildOnlyCompleted() : variant === "deep" ? buildDeep() : variant === "pocket-window" ? buildPocketWindow() : buildTypical();
   return new StaticFixtureTaskApi(variant, fixture);
 }
 
 export function previewVariantFromLocation(): PreviewVariant | undefined {
   if (typeof window === "undefined") return undefined;
   const value = new URLSearchParams(window.location.search).get("preview");
-  return value === "typical" || value === "dense" || value === "no-active" || value === "empty" || value === "error" || value === "only-completed" || value === "deep" ? value : undefined;
+  return value === "typical" || value === "dense" || value === "no-active" || value === "empty" || value === "error" || value === "only-completed" || value === "deep" || value === "pocket-window" ? value : undefined;
 }
