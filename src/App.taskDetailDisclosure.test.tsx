@@ -16,6 +16,12 @@ async function ready(): Promise<void> {
   await screen.findByRole("heading", { name: "NOW 残っている仕事" });
 }
 
+function loadedStyles(): string {
+  return Array.from(document.styleSheets).map((sheet) => {
+    try { return Array.from(sheet.cssRules).map((rule) => rule.cssText).join("\n"); } catch { return ""; }
+  }).join("\n");
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -28,7 +34,14 @@ describe("task-detail-disclosure UI integration", () => {
 
     const row = rowFor("再現条件をテストケースにする");
     expect(row).toHaveAttribute("data-disclosure-state", "resting");
-    expect(row.querySelector(".task-meta")).toHaveTextContent("残り");
+    const taskMeta = row.querySelector(".task-meta") as HTMLElement;
+    expect(taskMeta).toHaveTextContent("残り");
+    expect(taskMeta).toHaveClass("sr-only");
+    expect(getComputedStyle(taskMeta).position).toBe("absolute");
+    expect(getComputedStyle(taskMeta).width).toBe("1px");
+    expect(getComputedStyle(taskMeta).height).toBe("1px");
+    const treeItem = row.closest("[role='treeitem']") as HTMLElement;
+    expect(treeItem.getAttribute("aria-describedby")).toContain(taskMeta.id);
     expect(row.querySelector(".child-count")).toBeNull();
     expect(row.querySelector(".memo-presence")).toBeNull();
     expect(row.querySelector(".hierarchy-path")).toBeNull();
@@ -36,6 +49,8 @@ describe("task-detail-disclosure UI integration", () => {
 
     const actions = row.querySelector(".row-actions") as HTMLElement;
     const action = actions.querySelector("button") as HTMLElement;
+    expect(actions).not.toHaveAttribute("aria-hidden", "true");
+    expect(getComputedStyle(actions).visibility).toBe("hidden");
     expect(getComputedStyle(actions).opacity).toBe("0");
     expect(getComputedStyle(actions).pointerEvents).toBe("none");
     expect(getComputedStyle(action).pointerEvents).toBe("none");
@@ -51,6 +66,7 @@ describe("task-detail-disclosure UI integration", () => {
     expect(selected.querySelector("[data-lifetime-readout='task-api']")).toHaveTextContent(/作成 .* → NOW /);
     expect(selected.querySelector(".hierarchy-path")).toBeNull();
     expect(document.querySelectorAll("[data-disclosure-state='selected']")).toHaveLength(1);
+    expect(selected.querySelector(".row-actions")).not.toHaveAttribute("aria-hidden", "true");
     expect(getComputedStyle(selected.querySelector(".row-actions") as HTMLElement).pointerEvents).toBe("auto");
 
     await userEvent.click(timelineCell("task-next-1"));
@@ -59,20 +75,32 @@ describe("task-detail-disclosure UI integration", () => {
     expect(document.querySelector("[data-row-id='task-next-1']")).toHaveAttribute("data-disclosure-state", "selected");
   });
 
-  it("keeps selection and actions unchanged while another row is hovered", async () => {
+  it("keeps selection stable while hover projects pointer actions without keyboard disclosure", async () => {
     render(<App api={createFixtureTaskApi("typical")} />);
     await ready();
     await userEvent.click(timelineCell("task-api"));
 
     const selected = document.querySelector("[data-row-id='task-api']") as HTMLElement;
     const hovered = document.querySelector("[data-row-id='task-answer']") as HTMLElement;
+    const hoveredActions = hovered.querySelector(".row-actions") as HTMLElement;
+    const hoveredButtons = Array.from(hoveredActions.querySelectorAll<HTMLButtonElement>("button"));
+    expect(hoveredButtons).toHaveLength(3);
+    expect(hoveredButtons.every((button) => button.tabIndex === -1)).toBe(true);
+    expect(hoveredActions).not.toHaveAttribute("aria-hidden", "true");
+    expect(getComputedStyle(hoveredActions).visibility).toBe("hidden");
+    const styles = loadedStyles();
+    expect(styles).toMatch(/\.history-row:not\(\.is-editing\):hover \.row-actions,[^{}]*\{[^}]*visibility:\s*visible[^}]*pointer-events:\s*auto/);
+    expect(styles).toMatch(/\.history-row:not\(\.is-editing\):hover \.row-actions \.quiet-action,[^{}]*\{[^}]*pointer-events:\s*auto/);
     fireEvent.mouseEnter(hovered);
     expect(selected).toHaveAttribute("data-disclosure-state", "selected");
     expect(hovered).toHaveAttribute("data-disclosure-state", "resting");
     expect(hovered.querySelector(".selected-lifetime-readout")).toBeNull();
-    expect(getComputedStyle(hovered.querySelector(".row-actions") as HTMLElement).pointerEvents).toBe("none");
+    expect(hoveredButtons.every((button) => button.tabIndex === -1)).toBe(true);
     fireEvent.mouseLeave(hovered);
     expect(selected).toHaveAttribute("data-disclosure-state", "selected");
+    expect(hovered).toHaveAttribute("data-disclosure-state", "resting");
+    expect(getComputedStyle(hoveredActions).visibility).toBe("hidden");
+    expect(getComputedStyle(hoveredActions).pointerEvents).toBe("none");
   });
 
   it("makes focus entering a row produce the same disclosure as explicit selection", async () => {
@@ -148,7 +176,7 @@ describe("task-detail-disclosure UI integration", () => {
     await userEvent.click(timelineCell("task-next-1"));
     expect([snapshot(row), snapshot(mark), snapshot(hinge), snapshot(completion)]).toEqual(before);
     expect(getComputedStyle(row.querySelector(".row-actions") as HTMLElement).position).toBe("absolute");
-    expect(getComputedStyle(row.querySelector(".current-identity") as HTMLElement).paddingRight).toBe("8px");
+    expect(getComputedStyle(row.querySelector(".current-identity") as HTMLElement).paddingRight).toBe("var(--selected-action-width)");
   });
 
   it("keeps the dense 120-row fixture to one disclosed row", async () => {

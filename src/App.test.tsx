@@ -139,7 +139,7 @@ describe("history-left / NOW-right surface", () => {
     await ready();
     expect(document.querySelectorAll(".history-pocket").length).toBe(20);
     expect(document.querySelectorAll(".history-pocket .pocket-member-row").length).toBe(0);
-    expect(document.querySelectorAll(".history-pocket .pocket-mark").length).toBe(0);
+    expect(document.querySelectorAll(".history-pocket .pocket-summary .pocket-mark").length).toBe(20);
     expect(screen.queryByRole("button", { name: /完了済み/ })).not.toBeInTheDocument();
     await expandPocket("dense-completed-root-1");
     expect(document.querySelectorAll(".history-pocket.is-expanded .pocket-mark").length).toBe(30);
@@ -157,8 +157,13 @@ describe("history-left / NOW-right surface", () => {
     expect(caption.textContent).not.toContain("完了");
     expect(caption).toHaveAttribute("aria-expanded", "false");
     expect(caption).toHaveAttribute("id", "history-pocket-caption-task-completed");
+    expect(caption).toHaveAccessibleName(/作成 \d+\/\d+ \d{1,2}:40 → 完了 \d+\/\d+ \d{1,2}:57/);
+    expect(caption).toHaveAccessibleName(/展開して各タスクの期間を表示/);
     expect(pocket.querySelector(".pocket-lanes")).toBeNull();
     expect(pocket.querySelectorAll(".pocket-member-row")).toHaveLength(0);
+    const collapsedRootMark = pocket.querySelector(".pocket-summary .pocket-mark") as HTMLElement;
+    expect(collapsedRootMark).toHaveAttribute("data-history-mark", "task-completed");
+    expect(collapsedRootMark).toHaveAttribute("data-lifetime-kind");
 
     await userEvent.click(caption);
     expect(pocket).toHaveClass("is-expanded");
@@ -170,6 +175,13 @@ describe("history-left / NOW-right surface", () => {
     expect(getComputedStyle(lanes).borderLeftWidth).toBe("");
     expect(getComputedStyle(lanes).paddingLeft).toBe("0px");
     expect(getComputedStyle(lanes).paddingRight).toBe("0px");
+    const expandedRootMark = pocket.querySelector("[data-history-member-id='task-completed'] .pocket-mark") as HTMLElement;
+    expect(expandedRootMark).toHaveAttribute("data-history-mark", "task-completed");
+    expect(expandedRootMark.className).toBe(collapsedRootMark.className);
+    expect(expandedRootMark.style.left).toBe(collapsedRootMark.style.left);
+    expect(expandedRootMark.style.width).toBe(collapsedRootMark.style.width);
+    expect(expandedRootMark.dataset.startMs).toBe(collapsedRootMark.dataset.startMs);
+    expect(expandedRootMark.dataset.endMs).toBe(collapsedRootMark.dataset.endMs);
     const styles = loadedStyles();
     const laneRule = styles.match(/\.history-pocket \.pocket-lanes\s*\{[^}]+\}/)?.[0] ?? "";
     expect(laneRule).toContain("width: 100%");
@@ -235,6 +247,48 @@ describe("history-left / NOW-right surface", () => {
     expect(Number.parseFloat(pocketMark.style.width)).toBeCloseTo(((completed - created) / span) * 100, 10);
   });
 
+  it("uses the root lifetime when collapsed and each member lifetime when expanded", async () => {
+    renderPreview("only-completed");
+    await ready();
+    await userEvent.selectOptions(screen.getByLabelText("時間範囲"), "all");
+
+    const pocket = pocketFor("only-completed-root");
+    const ruler = timelineRuler();
+    const rangeStart = Number(ruler.dataset.rangeStartMs);
+    const rangeEnd = Number(ruler.dataset.rangeEndMs);
+    const span = rangeEnd - rangeStart;
+    const summaryRail = pocket.querySelector(".pocket-summary-rail") as HTMLElement;
+    const collapsedRoot = summaryRail.querySelector(".pocket-mark") as HTMLElement;
+    expect(collapsedRoot).toHaveAttribute("data-lifetime-kind", "interval");
+    expect(collapsedRoot.dataset.startMs).toBe(String(Date.parse("2026-08-22T03:10:00.000Z")));
+    expect(collapsedRoot.dataset.endMs).toBe(String(Date.parse("2026-08-22T05:20:00.000Z")));
+    expect(Number.parseFloat(collapsedRoot.style.left)).toBeCloseTo(((Date.parse("2026-08-22T03:10:00.000Z") - rangeStart) / span) * 100, 10);
+    expect(Number.parseFloat(collapsedRoot.style.width)).toBeCloseTo(((Date.parse("2026-08-22T05:20:00.000Z") - Date.parse("2026-08-22T03:10:00.000Z")) / span) * 100, 10);
+    expect(getComputedStyle(summaryRail).width).toBe("100%");
+    expect(getComputedStyle(summaryRail).paddingLeft).toBe("0px");
+    expect(getComputedStyle(summaryRail).paddingRight).toBe("0px");
+
+    await userEvent.click(pocket.querySelector(".pocket-caption") as HTMLElement);
+    const lanes = pocket.querySelector(".pocket-lanes") as HTMLElement;
+    const rootTrack = pocket.querySelector("[data-history-member-id='only-completed-root'] .pocket-member-track") as HTMLElement;
+    const expandedRoot = pocket.querySelector("[data-history-member-id='only-completed-root'] .pocket-mark") as HTMLElement;
+    const childMark = pocket.querySelector("[data-history-member-id='only-completed-child'] .pocket-mark") as HTMLElement;
+    expect(getComputedStyle(lanes).width).toBe("100%");
+    expect(getComputedStyle(rootTrack).width).toBe(getComputedStyle(summaryRail).width);
+    expect(getComputedStyle(lanes).paddingLeft).toBe("0px");
+    expect(getComputedStyle(lanes).paddingRight).toBe("0px");
+    expect(expandedRoot.style.left).toBe(collapsedRoot.style.left);
+    expect(expandedRoot.style.width).toBe(collapsedRoot.style.width);
+    expect(expandedRoot.className).toBe(collapsedRoot.className);
+    expect(childMark).toHaveAttribute("data-lifetime-kind", "interval");
+    expect(childMark.dataset.startMs).toBe(String(Date.parse("2026-08-22T03:30:00.000Z")));
+    expect(childMark.dataset.endMs).toBe(String(Date.parse("2026-08-22T04:05:00.000Z")));
+    expect(Number.parseFloat(childMark.style.left)).toBeCloseTo(((Date.parse("2026-08-22T03:30:00.000Z") - rangeStart) / span) * 100, 10);
+    expect(Number.parseFloat(childMark.style.width)).toBeCloseTo(((Date.parse("2026-08-22T04:05:00.000Z") - Date.parse("2026-08-22T03:30:00.000Z")) / span) * 100, 10);
+    expect(childMark.style.left).not.toBe(expandedRoot.style.left);
+    expect(childMark.style.width).not.toBe(expandedRoot.style.width);
+  });
+
   it("keeps add, range, and reload in one desktop tab order with a two-tier narrow layout", async () => {
     renderPreview("typical");
     await ready();
@@ -276,9 +330,10 @@ describe("history-left / NOW-right surface", () => {
     const identity = row.querySelector(".current-identity") as HTMLElement;
     const bar = row.querySelector(".lifetime-bar") as HTMLElement;
     expect(row).toHaveClass("is-selected");
-    expect(getComputedStyle(mark).backgroundColor).toBe("rgb(237, 247, 242)");
+    expect(getComputedStyle(mark).backgroundColor).toBe("var(--task-selected-mark)");
     const restingHinge = timelineCell("task-answer").closest(".history-row")?.querySelector(".now-hinge-cell") as HTMLElement;
-    expect(getComputedStyle(hinge).backgroundColor).toBe(getComputedStyle(restingHinge).backgroundColor);
+    expect(getComputedStyle(hinge).backgroundColor).toBe("var(--task-selected-hinge)");
+    expect(getComputedStyle(hinge).backgroundColor).not.toBe(getComputedStyle(restingHinge).backgroundColor);
     expect(getComputedStyle(identity).boxShadow).toContain("inset");
     expect(getComputedStyle(bar).boxShadow).toContain("0 0 0 1px");
   });
@@ -297,7 +352,7 @@ describe("history-left / NOW-right surface", () => {
     await ready();
     const pocket = pocketFor("only-completed-root");
     expect(pocket.querySelectorAll(".pocket-member-row")).toHaveLength(0);
-    expect(pocket.querySelectorAll(".pocket-mark")).toHaveLength(0);
+    expect(pocket.querySelectorAll(".pocket-summary .pocket-mark")).toHaveLength(1);
     expect(pocket.querySelectorAll(".pocket-member-title")).toHaveLength(0);
     await expandPocket("only-completed-root");
     expect(pocket.querySelectorAll(".pocket-member-row")).toHaveLength(2);
@@ -493,6 +548,13 @@ describe("history-left / NOW-right surface", () => {
     renderPreview("typical");
     await ready();
     const row = rowFor("明日の調査メモを残す");
+    const taskCopy = row.querySelector(".task-copy") as HTMLElement;
+    expect(getComputedStyle(taskCopy).display).toBe("grid");
+    expect(getComputedStyle(taskCopy).gridTemplateRows).toBe("minmax(0, 1fr)");
+    const styles = loadedStyles();
+    expect(styles).toMatch(/\.history-row\.task-row \.task-copy\s*\{[^}]*grid-template-rows:\s*minmax\(0, 1fr\)/);
+    expect(styles).toMatch(/\.history-row\.task-row \.task-title\s*\{[^}]*grid-row:\s*1/);
+    expect(styles).not.toMatch(/\.history-row\.task-row \.task-copy\s*\{[^}]*grid-template-rows:\s*18px 15px/);
     await userEvent.click(within(row).getByRole("button", { name: "明日の調査メモを残す" }));
     const taskRow = row.querySelector(".task-row") as HTMLElement;
     const actions = taskRow.querySelector(".row-actions") as HTMLElement;
@@ -500,14 +562,32 @@ describe("history-left / NOW-right surface", () => {
     const renameForm = taskRow.querySelector(".rename-form") as HTMLElement;
     const renameInput = renameForm.querySelector("input") as HTMLElement;
     const taskMeta = taskRow.querySelector(".task-meta") as HTMLElement;
+    const rowHeight = getComputedStyle(taskRow).height;
     expect(taskRow).toHaveClass("is-editing");
     expect(actions).toHaveClass("is-suppressed");
     expect(getComputedStyle(actions).visibility).toBe("hidden");
     expect(getComputedStyle(actions).pointerEvents).toBe("none");
+    expect(getComputedStyle(taskRow).height).toBe(rowHeight);
     expect(getComputedStyle(identity).paddingRight).toBe("8px");
     expect(Number.parseFloat(getComputedStyle(renameForm).minWidth)).toBe(0);
     expect(Number.parseFloat(getComputedStyle(renameInput).minWidth)).toBe(0);
+    expect(getComputedStyle(renameForm).alignItems).toBe("center");
+    expect(getComputedStyle(renameForm).flexWrap).toBe("nowrap");
+    expect(getComputedStyle(renameForm).gridRow).toBe("1");
+    expect(styles).toMatch(/\.history-row\.task-row\.is-editing \.rename-form\s*\{[^}]*animation:\s*none/);
+    expect(getComputedStyle(renameInput).height).toBe("30px");
+    const saveButton = within(renameForm).getByRole("button", { name: "保存" });
+    const cancelButton = within(renameForm).getByRole("button", { name: "取消" });
+    expect(saveButton).toHaveAccessibleName("保存");
+    expect(cancelButton).toHaveAccessibleName("取消");
+    expect(Array.from(renameForm.querySelectorAll("button")).every((button) => getComputedStyle(button).height === "30px")).toBe(true);
+    expect(styles).toMatch(/@media \(max-width:\s*520px\)[\s\S]*\.history-row\.task-row\.is-editing \.rename-form button\s*\{[^}]*flex:\s*0 0 30px[^}]*width:\s*30px[^}]*min-width:\s*30px/);
+    expect(styles).toMatch(/\.history-row\.task-row\.is-editing \.rename-form button\[type="submit"\]::before\s*\{[^}]*content:\s*"✓"/);
+    expect(styles).toMatch(/\.history-row\.task-row\.is-editing \.rename-form button\[type="button"\]::before\s*\{[^}]*content:\s*"×"/);
     expect(getComputedStyle(taskMeta).display).toBe("none");
+    await userEvent.click(within(renameForm).getByRole("button", { name: "取消" }));
+    expect(row.querySelector(".task-title")).toBeInTheDocument();
+    expect(getComputedStyle(taskCopy).gridTemplateRows).toBe("minmax(0, 1fr)");
   });
 
   it("anchors current delete confirmation to the row without changing flow", async () => {
@@ -1049,13 +1129,76 @@ describe("history-left / NOW-right surface", () => {
     expect(getComputedStyle(actions).opacity).toBe("0");
     expect(getComputedStyle(actions).pointerEvents).toBe("none");
     const completion = within(row.querySelector(".task-row") as HTMLElement).getByRole("button", { name: /明日の調査メモを残すを完了にする/ });
-    expect(getComputedStyle(completion).width).toBe("34px");
-    expect(getComputedStyle(completion).height).toBe("34px");
+    expect(getComputedStyle(completion).width).toBe("40px");
+    expect(getComputedStyle(completion).height).toBe("40px");
     fireEvent.mouseEnter(completion);
-    expect(getComputedStyle(completion).width).toBe("34px");
+    expect(getComputedStyle(completion).width).toBe("40px");
     completion.focus();
-    expect(getComputedStyle(completion).width).toBe("34px");
+    expect(getComputedStyle(completion).width).toBe("40px");
     expect(getComputedStyle(within(completion).getByText("完了", { selector: ".completion-intent" })).display).toBe("none");
+  });
+
+  it("keeps row actions on a full-height state-matched rail without a seam", async () => {
+    renderPreview("typical");
+    await ready();
+    const styles = loadedStyles();
+    const actions = rowFor("明日の調査メモを残す").querySelector(".row-actions") as HTMLElement;
+    expect(getComputedStyle(actions).top).toBe("0px");
+    expect(getComputedStyle(actions).bottom).toBe("0px");
+    expect(getComputedStyle(actions).height).toBe("100%");
+    expect(styles).toMatch(/\.row-actions\s*\{[^}]*background:\s*transparent[^}]*box-shadow:\s*none/);
+    expect(styles).toMatch(/\.history-row\.task-row:not\(\.is-selected\):hover \.row-actions,[^{}]*\{[^}]*background:\s*var\(--task-hover-surface\)[^}]*box-shadow:\s*none/);
+    expect(styles).toMatch(/\.history-row\.task-row\.is-selected \.row-actions\s*\{[^}]*background:\s*var\(--task-selected-surface\)[^}]*box-shadow:\s*none/);
+    expect(styles).toMatch(/\.history-row\.task-row:not\(\.is-editing\):hover \.current-identity,[\s\S]*\.history-row\.task-row:not\(\.is-editing\)\.is-selected \.current-identity\s*\{[^}]*padding-right:\s*var\(--selected-action-width\)/);
+    expect(styles).toMatch(/\.history-row\.task-row\.is-editing \.current-identity\s*\{[^}]*padding-right:\s*8px/);
+    expect(styles).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.history-row\.task-row\s*\{[^}]*--selected-action-width:\s*84px/);
+    expect(styles).toMatch(/@media \(max-width:\s*520px\)[\s\S]*\.history-row\.task-row\s*\{[^}]*--selected-action-width:\s*78px/);
+    expect(styles).not.toMatch(/\.row-actions[^{}]*linear-gradient/);
+  });
+
+  it("keeps completion hover and keyboard focus paint on the inner glyph", async () => {
+    renderPreview("typical");
+    await ready();
+    const styles = loadedStyles();
+    expect(styles).toMatch(/\.history-row\.task-row \.completion-box:hover,[^{}]*\.completion-box:focus-visible\s*\{[^}]*outline:\s*none[^}]*box-shadow:\s*none/);
+    expect(styles).toMatch(/\.history-row\.task-row \.completion-box:focus-visible \.completion-glyph\s*\{[^}]*outline:\s*3px solid var\(--focus\)/);
+  });
+
+  it("separates hierarchy cues from completion and selection at rest", async () => {
+    renderPreview("typical");
+    await ready();
+
+    const parentRow = rowFor("APIレスポンス遅延の原因を切り分ける").querySelector(".task-row") as HTMLElement;
+    const childRow = rowFor("再現条件をテストケースにする").querySelector(".task-row") as HTMLElement;
+    const standaloneRow = rowFor("明日の調査メモを残す").querySelector(".task-row") as HTMLElement;
+
+    expect(parentRow).toHaveClass("is-parent");
+    expect(parentRow).not.toHaveClass("is-standalone");
+    expect(parentRow).toHaveAttribute("data-hierarchy-kind", "parent");
+    expect(parentRow.querySelector(".child-count")).toHaveTextContent("子3・未完了2");
+    const parentCopy = parentRow.querySelector(".task-copy") as HTMLElement;
+    expect(parentCopy.querySelector(".disclosure")?.nextElementSibling).toBe(parentCopy.querySelector(".task-title"));
+    expect(getComputedStyle(parentRow.querySelector(".task-title") as HTMLElement).fontWeight).toBe("800");
+
+    expect(childRow).toHaveClass("is-child");
+    expect(childRow).toHaveAttribute("data-hierarchy-kind", "child");
+    expect(childRow.querySelector(".branch-rail")).toBeInTheDocument();
+    expect(childRow.querySelector(".branch-rail")).toHaveStyle({ marginLeft: "22px" });
+    expect(childRow.querySelector(".task-copy")).toHaveClass("is-child-leaf");
+    expect(getComputedStyle(childRow.querySelector(".task-copy") as HTMLElement).paddingLeft).toBe("26px");
+
+    expect(standaloneRow).toHaveClass("is-standalone");
+    expect(standaloneRow).toHaveAttribute("data-hierarchy-kind", "standalone");
+    expect(standaloneRow.querySelector(".disclosure")).toBeNull();
+    expect(standaloneRow.querySelector(".disclosure-spacer")).toBeNull();
+    expect(standaloneRow.querySelector(".branch-rail")).toBeNull();
+
+    const completion = within(standaloneRow).getByRole("button", { name: /明日の調査メモを残すを完了にする/ });
+    expect(completion.textContent).not.toContain("✓");
+    expect(completion).toHaveAttribute("data-completion-state", "incomplete");
+    expect(getComputedStyle(completion).width).toBe("40px");
+    expect(getComputedStyle(completion).height).toBe("40px");
+    expect(getComputedStyle(completion.querySelector(".completion-glyph") as HTMLElement).width).toBe("22px");
   });
 
   it("keeps localized top and child create forms on the existing hierarchy contract", async () => {
@@ -1241,7 +1384,12 @@ describe("history-left / NOW-right surface", () => {
     expect(new Set(branches.map((branch) => branch.getAttribute("aria-level")))).toEqual(new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9"]));
     expect(branches.every((branch) => branch.querySelector(".depth-cue") === null)).toBe(true);
     expect(new Set(branches.map((branch) => branch.style.getPropertyValue("--depth-offset"))).size).toBe(9);
-    expect(branches.every((branch) => branch.querySelector(".branch-rail") !== null)).toBe(true);
+    const ownRail = (branch: HTMLElement): HTMLElement | null => {
+      const row = branch.querySelector<HTMLElement>(`[data-row-id="${branch.dataset.taskId}"]`);
+      return row?.querySelector<HTMLElement>(".branch-rail") ?? null;
+    };
+    expect(ownRail(branches[0])).toBeNull();
+    expect(branches.slice(1).every((branch) => ownRail(branch) !== null)).toBe(true);
     expect(loadedStyles()).toMatch(/\.branch-rail::after\s*\{[^}]*width:\s*clamp\(/);
     const deepRow = document.querySelector("[data-row-id='deep-task-8']") as HTMLElement;
     expect(deepRow).toBeInTheDocument();
@@ -1400,6 +1548,49 @@ describe("history-left / NOW-right surface", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("expands and restores the same live editor instance without losing the draft", async () => {
+    renderPreview("typical");
+    await ready();
+    await userEvent.click(timelineCell("task-next-1"));
+    await userEvent.click(screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" }));
+
+    const editor = screen.getByRole("textbox", { name: "メモ本文" });
+    fireEvent.change(editor, { target: { value: "# live draft\n\n**same editor**" } });
+    const editorNode = document.querySelector(".cm-editor");
+    expect(editorNode).toBeInTheDocument();
+    expect(editor).toHaveValue("# live draft\n\n**same editor**");
+
+    await userEvent.click(screen.getByRole("button", { name: "拡大表示" }));
+    expect(screen.getByRole("dialog")).toHaveClass("is-expanded");
+    expect(document.querySelector(".cm-editor")).toBe(editorNode);
+    expect(screen.getByRole("textbox", { name: "メモ本文" })).toHaveValue("# live draft\n\n**same editor**");
+
+    await userEvent.click(screen.getByRole("button", { name: "元のサイズに戻す" }));
+    expect(screen.getByRole("dialog")).not.toHaveClass("is-expanded");
+    expect(document.querySelector(".cm-editor")).toBe(editorNode);
+    expect(screen.getByRole("textbox", { name: "メモ本文" })).toHaveValue("# live draft\n\n**same editor**");
+  });
+
+  it("does not dismiss or save while IME composition is active", async () => {
+    const api = renderPreview("typical");
+    const update = vi.spyOn(api, "updateTaskMemo");
+    await ready();
+    await userEvent.click(timelineCell("task-next-1"));
+    const origin = screen.getByRole("button", { name: "再現条件をテストケースにするのメモを編集" });
+    await userEvent.click(origin);
+    const dialog = screen.getByRole("dialog");
+    const editor = screen.getByRole("textbox", { name: "メモ本文" });
+    const save = screen.getByRole("button", { name: "保存" });
+
+    fireEvent.compositionStart(editor);
+    expect(save).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(update).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(editor);
+    await waitFor(() => expect(save).not.toBeDisabled());
+  });
+
   it("keeps outside clicks inert, traps Tab, and returns focus on Cancel or Escape", async () => {
     renderPreview("typical");
     await ready();
@@ -1408,9 +1599,10 @@ describe("history-left / NOW-right surface", () => {
     await userEvent.click(origin);
     const dialog = screen.getByRole("dialog");
     const textarea = screen.getByRole("textbox", { name: "メモ本文" });
+    const size = screen.getByRole("button", { name: "拡大表示" });
     await waitFor(() => expect(document.activeElement).toBe(textarea));
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "保存" }));
+    expect(document.activeElement).toBe(size);
     fireEvent.keyDown(dialog, { key: "Tab" });
     expect(document.activeElement).toBe(textarea);
     const modal = document.querySelector("[data-memo-modal]") as HTMLElement;

@@ -21,6 +21,7 @@
   --danger: #9c3e36;
   --danger-soft: #fae5e0;
   --focus: #e19c31;
+  --focus-soft: rgba(225, 156, 49, .24);
   --hover: #fff;
   --selected: #f6fbf8;
   --row-surface: rgba(251, 252, 250, .76);
@@ -328,25 +329,16 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .history-row .current-identity .task-copy { display: flex; }
 .history-row .drag-handle, .history-row .disclosure, .history-row .completion-box { flex: 0 0 32px; }
 
-/* Remaining rows keep one fixed-height band.  Disclosure text yields through
-   clipping/truncation instead of creating a second line or shifting neighbors. */
+/* Remaining rows keep one fixed-height, one-line band.  Disclosure text yields
+   through clipping/truncation instead of creating a second line or shifting
+   neighbors. */
 .history-row.task-row { height: 46px; min-height: 46px; max-height: 46px; overflow: hidden; }
 .history-row.task-row .current-identity { overflow: hidden; }
 .history-row.task-row .task-copy { flex-wrap: nowrap; align-items: center; min-width: 0; overflow: hidden; }
 .history-row.task-row .task-title { min-width: 0; flex: 1 1 auto; }
 .history-row.task-row .task-meta { flex: 0 0 auto; }
-.history-row.task-row.is-selected .current-identity,
-.history-row.task-row:focus-within .current-identity { padding-right: 124px; }
-.history-row.task-row.is-selected .task-copy,
-.history-row.task-row:focus-within .task-copy { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 18px 15px; align-content: center; align-items: center; gap: 0; padding-top: 3px; padding-bottom: 3px; }
-.history-row.task-row.is-selected .task-title,
-.history-row.task-row:focus-within .task-title { grid-column: 1 / -1; grid-row: 1; width: 100%; }
-.history-row.task-row.is-selected .task-meta,
-.history-row.task-row:focus-within .task-meta { grid-column: 1; grid-row: 2; min-width: 0; }
 .history-row.task-row .row-actions { width: 124px; gap: 2px; padding-left: 8px; }
 .history-row.task-row .row-actions .quiet-action { min-height: 28px; padding: 3px 5px; font-size: 11px; }
-.history-row.task-row.is-selected .row-actions,
-.history-row.task-row:focus-within .row-actions { background: linear-gradient(to right, transparent, var(--selected-identity) 10px); }
 
 /* Selection-only ancestry stays in the fixed identity line.  It must never
    create an extra row band or move neighboring task geometry. */
@@ -478,13 +470,18 @@ button:disabled { cursor: not-allowed; opacity: .52; }
    with the ruler, NOW identity, or primary task title at normal density. */
 .now-caption.sr-only, .range-legend.sr-only, .history-help.sr-only { position: absolute !important; }
 
-/* Secondary row actions occupy one stable end region.  Selection or focus
-   exposes them; resting rows keep them out of pointer and keyboard flow. */
+/* Secondary row actions occupy one stable end region.  Selection/focus and a
+   transient row hover expose them; resting rows keep them out of pointer and
+   accessibility flow without reserving extra geometry. */
 .current-identity { position: relative; }
-.row-actions { position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: flex-end; width: 148px; padding-right: 8px; padding-left: 16px; background: linear-gradient(to right, transparent, var(--paper) 16px); opacity: 0; pointer-events: none; transform: translateX(4px); transition: opacity var(--duration-fast) var(--ease-exit), transform var(--duration-fast) var(--ease-exit); }
-.history-row:focus-within .row-actions, .history-row.is-selected .row-actions { opacity: 1; pointer-events: auto; transform: translateX(0); }
+.row-actions { position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: flex-end; width: 148px; padding-right: 8px; padding-left: 16px; background: transparent; box-shadow: none; visibility: hidden; opacity: 0; pointer-events: none; transform: translateX(4px); transition: opacity var(--duration-fast) var(--ease-exit), transform var(--duration-fast) var(--ease-exit), visibility 0s linear var(--duration-fast); }
+.history-row:not(.is-editing):hover .row-actions,
+.history-row:not(.is-editing):focus-within .row-actions,
+.history-row:not(.is-editing).is-selected .row-actions { visibility: visible; opacity: 1; pointer-events: auto; transform: translateX(0); transition-delay: 0s; }
 .row-actions .quiet-action { flex: 0 0 auto; pointer-events: none; }
-.history-row:focus-within .row-actions .quiet-action, .history-row.is-selected .row-actions .quiet-action { pointer-events: auto; }
+.history-row:not(.is-editing):hover .row-actions .quiet-action,
+.history-row:not(.is-editing):focus-within .row-actions .quiet-action,
+.history-row:not(.is-editing).is-selected .row-actions .quiet-action { pointer-events: auto; }
 .range-current::before { content: "NOW"; }
 
 /* Completion is a fixed primary cell.  Hover/focus changes only its
@@ -728,6 +725,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
     --danger: #ff9b92;
     --danger-soft: #3b2527;
     --focus: #8ddcff;
+    --focus-soft: rgba(141, 220, 255, .28);
     --hover: #202d30;
     --selected: #224a4b;
     --row-surface: #151b1e;
@@ -808,17 +806,68 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .history-row.is-editing .current-identity { padding-right: 8px; }
 .history-detail-actions { flex-wrap: wrap; }
 
-/* A selected row has two information bands: its title stays unobstructed in
-   the upper band, while secondary actions share the lower band with metadata.
-   Reserving the actions across the full row made deep task identity disappear
-   at narrow widths even though the hierarchy rail itself was bounded. */
-.history-row.task-row { --selected-action-width: 124px; }
-.history-row.task-row.is-selected .current-identity,
-.history-row.task-row:focus-within .current-identity { padding-right: 8px; }
-.history-row.task-row .row-actions { top: auto; width: var(--selected-action-width); height: 24px; }
-.history-row.task-row .row-actions .quiet-action { min-height: 22px; padding-top: 2px; padding-bottom: 2px; }
-.history-row.task-row.is-selected .task-meta,
-.history-row.task-row:focus-within .task-meta { max-width: calc(100% - var(--selected-action-width)); overflow: hidden; text-overflow: ellipsis; }
+/* Remaining task rows use one shared centerline.  The assistive metadata is
+   absolutely clipped, so it never creates a second grid track or pushes the
+   title/editor into a lower band. */
+.history-row.task-row {
+  --selected-action-width: 124px;
+  --task-hover-surface: #f3f7f4;
+  --task-hover-mark: #f4f8f5;
+  --task-hover-hinge: #f2f7f4;
+  --task-selected-surface: #dceee8;
+  --task-selected-mark: #d8ebe5;
+  --task-selected-hinge: #d4e9e1;
+  --task-selected-border: #8eaaa1;
+}
+.history-row.task-row .task-copy { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); align-content: center; align-items: center; gap: 0; padding-top: 3px; padding-bottom: 3px; }
+.history-row.task-row .task-title { grid-column: 1; grid-row: 1; width: 100%; line-height: 18px; }
+.history-row.task-row .task-meta { grid-column: 1 / -1; grid-row: 1; min-width: 0; }
+.history-row.task-row:not(.is-editing):hover .current-identity,
+.history-row.task-row:not(.is-editing):focus-within .current-identity,
+.history-row.task-row:not(.is-editing).is-selected .current-identity { padding-right: var(--selected-action-width); }
+.history-row.task-row.is-editing .current-identity { padding-right: 8px; }
+.history-row.task-row .row-actions { top: 0; right: 0; bottom: 0; width: var(--selected-action-width); height: 100%; }
+.history-row.task-row .row-actions .quiet-action { min-height: 28px; padding-top: 3px; padding-bottom: 3px; font-size: 11px; }
+.history-row.task-row.is-editing .rename-form { grid-column: 1; grid-row: 1; align-items: center; height: 30px; animation: none; }
+.history-row.task-row.is-editing .rename-form input,
+.history-row.task-row.is-editing .rename-form button { box-sizing: border-box; height: 30px; min-height: 30px; padding-top: 3px; padding-bottom: 3px; font: inherit; line-height: 18px; }
+.history-row.task-row.is-editing .rename-form input { font-size: 14px; font-weight: 700; }
+
+/* Hover is a quiet preview; selection remains the persistent, bounded teal
+   state.  The action rail uses the same state surface as the identity cell so
+   it reads as one row instead of a black/gradient panel. */
+.history-row.task-row:not(.is-selected):hover,
+.history-row.task-row:not(.is-selected):focus-within { background: var(--task-hover-surface); }
+.history-row.task-row.is-selected { background: var(--task-selected-surface); box-shadow: inset 0 1px 0 var(--task-selected-border), inset 0 -1px 0 var(--task-selected-border); }
+.history-row.task-row:not(.is-selected):hover .history-mark-cell,
+.history-row.task-row:not(.is-selected):focus-within .history-mark-cell { background-color: var(--task-hover-mark); }
+.history-row.task-row.is-selected .history-mark-cell { background-color: var(--task-selected-mark); }
+.history-row.task-row:not(.is-selected):hover .now-hinge-cell,
+.history-row.task-row:not(.is-selected):focus-within .now-hinge-cell { background-color: var(--task-hover-hinge); }
+.history-row.task-row.is-selected .now-hinge-cell { background-color: var(--task-selected-hinge); }
+.history-row.task-row:not(.is-selected):hover .current-identity:not(.is-drop-target),
+.history-row.task-row:not(.is-selected):focus-within .current-identity:not(.is-drop-target) { background-color: var(--task-hover-surface); box-shadow: inset 0 1px 0 var(--line), inset 0 -1px 0 var(--line); }
+.history-row.task-row.is-selected .current-identity:not(.is-drop-target) { background-color: var(--task-selected-surface); box-shadow: inset 0 1px 0 var(--task-selected-border), inset 0 -1px 0 var(--task-selected-border); }
+.history-row.task-row:not(.is-selected):hover .row-actions,
+.history-row.task-row:not(.is-selected):focus-within .row-actions { background: var(--task-hover-surface); box-shadow: none; }
+.history-row.task-row.is-selected .row-actions { background: var(--task-selected-surface); box-shadow: none; }
+
+/* Keep rename controls in the same one-row grammar as the title. */
+.history-row.task-row.is-editing .rename-form { width: 100%; min-width: 0; flex-wrap: nowrap; gap: 5px; }
+.history-row.task-row.is-editing .rename-form input { min-width: 0; }
+
+/* The 40px completion button is a hit target only.  Hover/focus paint belongs
+   to the inner circular glyph; keyboard focus remains clearly visible there. */
+.history-row.task-row .completion-box:hover,
+.history-row.task-row .completion-box:focus-visible {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+}
+.history-row.task-row .completion-box:hover .completion-glyph { border-color: var(--accent); background: var(--accent-soft); }
+.history-row.task-row .completion-box:focus-visible .completion-glyph { border-color: var(--accent); background: var(--accent-soft); outline: 3px solid var(--focus); outline-offset: 2px; }
 
 /* Direction B: a single docked dialog originates on the NOW/current side.
    The backdrop is an interaction boundary; it intentionally has no close
@@ -833,11 +882,21 @@ body.memo-modal-open { overflow: hidden; }
 .memo-dock-heading { min-width: 0; }
 .memo-dock-kicker { display: block; color: var(--muted); font-size: 10px; letter-spacing: .08em; }
 .memo-dock h2 { margin: 2px 0 0; overflow: hidden; color: var(--ink); font-size: 15px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.memo-dock-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .memo-origin-label { max-width: 132px; overflow: hidden; color: var(--muted); font-size: 10px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.memo-size-action { flex: 0 0 auto; min-height: 28px; border: 1px solid var(--line); background: var(--paper); padding: 4px 8px; color: var(--ink); font-size: 11px; cursor: pointer; }
+.memo-size-action:hover, .memo-size-action:focus-visible { border-color: var(--accent); color: var(--accent); }
 .memo-dialog-description { margin: 8px 12px 4px; color: var(--muted); font-size: 11px; line-height: 1.45; }
-.memo-textarea-label { margin: 6px 12px 3px; color: var(--ink); font-size: 11px; font-weight: 700; }
-.memo-textarea { width: calc(100% - 24px); min-height: 190px; max-height: min(50vh, 420px); margin: 0 12px; resize: vertical; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line); background: var(--surface); padding: 9px 10px; color: var(--ink); font: inherit; font-size: 13px; line-height: 1.55; }
-.memo-textarea:focus-visible { border-color: var(--accent); outline: 3px solid var(--focus); outline-offset: 1px; }
+.memo-live-editor { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 190px; max-height: min(50vh, 420px); margin: 6px 12px 0; min-width: 0; overflow: hidden; border: 1px solid var(--line); background: var(--surface); }
+.memo-live-editor:focus-within { outline: 3px solid var(--focus); outline-offset: -1px; }
+.memo-textarea-label { display: block; flex: 0 0 auto; margin: 7px 10px 3px; color: var(--ink); font-size: 11px; font-weight: 700; }
+.memo-live-editor-host { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden; }
+.memo-live-editor-host .cm-editor { flex: 1 1 auto; width: 100%; min-height: 0; height: 100%; }
+.memo-live-editor-host .cm-editor.cm-focused { outline: none; }
+.memo-live-editor-host .cm-scroller { overflow: auto; overscroll-behavior: contain; }
+.memo-live-editor-host .cm-activeLine,
+.memo-live-editor-host .cm-activeLineGutter { background: transparent; }
+.memo-live-editor-host .cm-content[aria-disabled="true"] { cursor: default; }
 .memo-scalar-count { margin: 4px 12px 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .memo-scalar-count.is-invalid { color: var(--danger); font-weight: 700; }
 .memo-dialog-status { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 8px; margin: 7px 12px 0; border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 6px 8px; color: var(--muted); font-size: 11px; line-height: 1.35; }
@@ -848,6 +907,9 @@ body.memo-modal-open { overflow: hidden; }
 .memo-save-action { min-height: 32px; border: 1px solid var(--accent); background: var(--accent); padding: 5px 12px; color: var(--on-accent); font-size: 12px; font-weight: 700; cursor: pointer; }
 .memo-save-action:hover:not(:disabled) { background: var(--ink); border-color: var(--ink); }
 .memo-dialog-actions .quiet-action { min-height: 32px; }
+.memo-dock.is-expanded { position: fixed; top: clamp(16px, 5vh, 52px); right: clamp(12px, 3vw, 40px); bottom: 16px; left: clamp(24px, 8vw, 96px); width: auto; max-height: none; }
+.memo-dock.is-expanded .memo-live-editor { max-height: none; min-height: 0; }
+.memo-dock.is-expanded .memo-dialog-description { max-width: 72ch; }
 
 @media (max-width: 760px), (max-height: 560px) {
   .current-identity { padding-right: 8px; }
@@ -862,8 +924,17 @@ body.memo-modal-open { overflow: hidden; }
   .memo-modal-backdrop { align-items: center; justify-content: center; padding: 12px; }
   .memo-dock { width: min(100%, 520px); max-height: calc(100vh - 24px); }
   .memo-dock-header { grid-template-columns: auto minmax(0, 1fr); }
-  .memo-origin-label { grid-column: 2; grid-row: 2; max-width: none; text-align: left; }
-  .memo-textarea { min-height: 150px; max-height: 42vh; }
+  .memo-dock-header-actions { grid-column: 2; grid-row: 2; justify-content: flex-start; }
+  .memo-origin-label { max-width: none; text-align: left; }
+  .memo-live-editor { min-height: 150px; max-height: 42vh; }
+  .memo-dock.is-expanded { top: 12px; right: 12px; bottom: 12px; left: 12px; }
+}
+
+/* Short viewports keep the commit controls in view.  Only the editor body
+   yields space and scrolls; the ordinary dock footer remains reachable. */
+@media (max-height: 560px) {
+  .memo-dock:not(.is-expanded) { height: calc(100vh - 24px); }
+  .memo-dock:not(.is-expanded) .memo-live-editor { min-height: 64px; max-height: none; }
 }
 
 /* At an effective 200% zoom on the minimum desktop width, identity and
@@ -874,11 +945,28 @@ body.memo-modal-open { overflow: hidden; }
   .history-row.task-row { --selected-action-width: 78px; }
   .history-row.task-row .row-actions { width: 78px; }
   .history-row.task-row .row-actions .quiet-action { width: 22px; min-width: 22px; }
+  .history-row.task-row.is-editing .rename-form button {
+    flex: 0 0 30px;
+    width: 30px;
+    min-width: 30px;
+    padding: 0;
+    font-size: 0;
+    text-align: center;
+  }
+  .history-row.task-row.is-editing .rename-form button::before {
+    display: block;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .history-row.task-row.is-editing .rename-form button[type="submit"]::before { content: "✓"; }
+  .history-row.task-row.is-editing .rename-form button[type="button"]::before { content: "×"; }
 }
 
 @media (forced-colors: active) {
   .memo-modal-backdrop { background: Canvas; }
-  .memo-dock, .memo-textarea, .memo-origin-cue, .memo-save-action, .memo-recovery-action { border-color: ButtonText; background: Canvas; color: CanvasText; }
+  .memo-dock, .memo-live-editor, .memo-origin-cue, .memo-size-action, .memo-save-action, .memo-recovery-action { border-color: ButtonText; background: Canvas; color: CanvasText; }
+  .memo-live-editor:focus-within { outline-color: Highlight; }
+  .memo-live-editor-host .memo-md-delimiter-concealed { color: CanvasText; }
   .memo-save-action { background: ButtonText; color: ButtonFace; }
   .memo-dialog-status.is-error { border-color: ButtonText; background: Canvas; color: CanvasText; }
   .memo-presence.has-memo { border-color: ButtonText; color: ButtonText; }
@@ -929,6 +1017,13 @@ body.memo-modal-open { overflow: hidden; }
 .now-hinge-cell.is-discontinuous::after { color: var(--now-label); }
 .now-hinge-cell > span { color: var(--now-label); }
 
+/* The shared hinge surface is declared later than the row-state compositor;
+   repeat the task-specific paint here so hover and selection stay coherent
+   across all three grid cells. */
+.history-row.task-row:not(.is-selected):hover .now-hinge-cell,
+.history-row.task-row:not(.is-selected):focus-within .now-hinge-cell { background-color: var(--task-hover-hinge); }
+.history-row.task-row.is-selected .now-hinge-cell { background-color: var(--task-selected-hinge); }
+
 /* Hierarchy is a right-side shape cue, subordinate to the title. */
 .branch-rail { background: var(--hierarchy-line); }
 .branch-rail::after { background: var(--hierarchy-line); }
@@ -948,36 +1043,21 @@ body.memo-modal-open { overflow: hidden; }
 .history-pocket.is-expanded .pocket-member-row.is-selected .pocket-member-title { color: var(--ink); font-weight: 700; }
 
 .pocket-summary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: end;
-  gap: 5px;
+  display: block;
+  width: 100%;
   min-width: 0;
-  padding: 1px 2px 0;
-}
-.pocket-summary-kicker {
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 12px;
-  white-space: nowrap;
+  padding: 1px 0 0;
 }
 .pocket-summary-rail {
   position: relative;
   display: block;
+  width: 100%;
   min-width: 0;
   height: 12px;
   border-bottom: 1px solid var(--temporal-line);
-  background: linear-gradient(to right, transparent 0, transparent 100%);
+  background: transparent;
 }
-.pocket-summary-bucket {
-  position: absolute;
-  bottom: 0;
-  width: calc(100% / 12);
-  min-height: 3px;
-  background: var(--distribution-line);
-  opacity: .84;
-}
-.pocket-summary-bucket[data-bucket-count="0"] { opacity: .08; }
+.pocket-summary .pocket-mark { top: 1px; }
 .history-detail-summary strong { font-size: 13px; font-weight: 800; }
 .history-detail-summary .history-detail-path {
   display: block;
@@ -1005,7 +1085,6 @@ body.memo-modal-open { overflow: hidden; }
   .now-hinge-header::before { background: ButtonText; color: ButtonFace; }
   .now-hinge-cell > span, .now-hinge-cell.is-discontinuous::after { color: ButtonText; }
   .pocket-summary-rail { border-bottom-color: ButtonText; }
-  .pocket-summary-bucket { background: ButtonText; }
   .history-pocket { border-right-color: ButtonText; }
   .history-detail-summary .history-detail-path { color: CanvasText; }
 }
@@ -1094,4 +1173,224 @@ body.memo-modal-open { overflow: hidden; }
   .update-receipt { border-top-width: 4px; }
   .update-progress-fill, .update-primary-action { background: ButtonText; color: ButtonFace; }
   .update-manual-restart { border-color: ButtonText; }
+}
+
+/* Task-row hierarchy / completion contract.  Hierarchy is carried by the
+   child branch and the title-adjacent disclosure; completion keeps a generous
+   hit area around a quiet visual mark so the three meanings do not merge. */
+.history-row.task-row .completion-box,
+.completion-box {
+  flex: 0 0 40px;
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+  overflow: visible;
+}
+.completion-glyph {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--completion-border);
+  border-radius: 50%;
+  background: transparent;
+  color: transparent;
+  font-size: 15px;
+  line-height: 1;
+}
+.completion-box:hover .completion-glyph,
+.completion-box:focus-visible .completion-glyph {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.completion-glyph.is-processing {
+  border-color: var(--accent);
+  border-style: dashed;
+  color: var(--accent);
+  font-weight: 800;
+  animation: completion-pending-pulse 900ms var(--ease-standard) infinite alternate;
+}
+.completion-box.is-pending {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.completion-box.is-pending .completion-intent { display: none; }
+
+/* A parent owns a disclosure button immediately before its title.  Leaf rows
+   intentionally have no empty disclosure slot, so a standalone task reads as
+   a standalone task instead of inheriting a phantom tree column. */
+.history-row.task-row .task-copy.has-disclosure {
+  grid-template-columns: 26px minmax(0, 1fr);
+}
+.history-row.task-row .task-copy.no-disclosure {
+  grid-template-columns: minmax(0, 1fr);
+}
+.history-row.task-row .task-copy.is-child-leaf {
+  padding-left: var(--leaf-title-inset, 26px);
+}
+.history-row.task-row .task-copy .disclosure {
+  grid-column: 1;
+  grid-row: 1;
+  width: 26px;
+  min-width: 26px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1;
+}
+.history-row.task-row .task-copy.has-disclosure .task-title,
+.history-row.task-row .task-copy.has-disclosure .rename-form {
+  grid-column: 2;
+  grid-row: 1;
+}
+.history-row.task-row .task-copy.no-disclosure .task-title,
+.history-row.task-row .task-copy.no-disclosure .rename-form {
+  grid-column: 1;
+  grid-row: 1;
+}
+.history-row.task-row .task-copy .task-meta {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+.history-row.task-row.is-parent .task-title { font-weight: 800; }
+.history-row.task-row.is-child:not(.is-parent) .task-title,
+.history-row.task-row.is-standalone .task-title { font-weight: 600; }
+.history-row.task-row .child-count {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 5px;
+  border-left-color: var(--hierarchy-line);
+  padding-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The branch rail exists only for actual children.  Each child contributes a
+   segment; the final visible child ends its vertical segment at the elbow. */
+.history-row.task-row .branch-rail {
+  position: relative;
+  align-self: stretch;
+  flex: 0 0 2px;
+  width: 2px;
+  margin-left: var(--depth-offset, 0px);
+  background: transparent;
+}
+.history-row.task-row .branch-rail::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--hierarchy-line);
+}
+.history-row.task-row .branch-rail.is-last-visible-child::before {
+  bottom: auto;
+  height: 50%;
+}
+.history-row.task-row .branch-rail::after {
+  left: 0;
+  width: clamp(10px, calc(var(--depth-offset, 0px) - 2px), 28px);
+  background: var(--hierarchy-line);
+}
+
+@keyframes completion-pending-pulse {
+  from { opacity: .48; }
+  to { opacity: 1; }
+}
+
+@media (forced-colors: active) {
+  .completion-glyph,
+  .history-row.task-row .branch-rail::before,
+  .history-row.task-row .branch-rail::after { border-color: ButtonText; background-color: transparent; background-image: none; }
+  .completion-glyph.is-processing { color: ButtonText; border-color: ButtonText; }
+  .history-row.task-row .branch-rail::before,
+  .history-row.task-row .branch-rail::after { background: ButtonText; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .history-row.task-row {
+    --task-hover-surface: #1b292b;
+    --task-hover-mark: #1a282b;
+    --task-hover-hinge: #1a2729;
+    --task-selected-surface: #224a4b;
+    --task-selected-mark: #204648;
+    --task-selected-hinge: #204648;
+    --task-selected-border: var(--accent);
+  }
+}
+
+/* A collapsed pocket paints its root lifetime on this same content track as
+   every expanded member.  The closed interval has a visible body plus two
+   differently shaped endpoint caps, so duration and endpoints remain legible
+   in the dark theme without turning short intervals into wider intervals. */
+.history-pocket .pocket-summary {
+  width: 100%;
+  padding-right: 0;
+  padding-left: 0;
+}
+.history-pocket .pocket-summary-rail {
+  width: 100%;
+  padding-right: 0;
+  padding-left: 0;
+}
+.history-pocket .pocket-mark.is-interval {
+  top: 5px;
+  z-index: 2;
+  min-width: 0;
+  height: 10px;
+  transform: translateX(-1px);
+  overflow: visible;
+  border: 1px solid var(--complete);
+  border-radius: 2px;
+  background: var(--closed-surface);
+  box-shadow: inset 0 -2px 0 var(--complete);
+  color: var(--complete);
+}
+.history-pocket .pocket-summary .pocket-mark.is-interval { top: 1px; }
+.history-pocket .pocket-mark.is-interval.is-clipped-left { border-left-style: dashed; }
+.history-pocket .pocket-mark.is-interval.is-clipped-right { border-right-style: dashed; }
+.pocket-lifetime-start,
+.pocket-lifetime-end {
+  position: absolute;
+  z-index: 1;
+  top: -4px;
+  height: 18px;
+  pointer-events: none;
+}
+.pocket-lifetime-start {
+  left: -2px;
+  width: 2px;
+  border-radius: 0 1px 1px 0;
+  background: currentColor;
+}
+.pocket-lifetime-end {
+  right: -3px;
+  width: 4px;
+  border: 1px solid currentColor;
+  border-left-width: 2px;
+  border-radius: 1px 0 0 1px;
+  background: var(--closed-surface);
+}
+.pocket-clip-chevron { z-index: 2; }
+
+@media (forced-colors: active) {
+  .history-pocket .pocket-mark.is-interval {
+    border-color: ButtonText;
+    background: Canvas;
+    box-shadow: inset 0 -2px 0 ButtonText;
+  }
+  .pocket-lifetime-start { background: ButtonText; }
+  .pocket-lifetime-end { border-color: ButtonText; background: Canvas; }
+  .pocket-clip-chevron { color: ButtonText; }
 }

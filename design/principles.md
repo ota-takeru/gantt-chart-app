@@ -21,6 +21,7 @@ These principles are working design DNA for the Gantt chart app. They are intent
 - Use color semantically for status, temporal meaning, alerts, selection, or other defined domain roles. Do not spend color on decoration when it competes with time and task interpretation.
 - Keep hierarchy, state, and interaction understandable without color alone. Contrast, typography, position, and texture should carry meaning where needed.
 - Establish visual styling after structural exploration. Typography, material, motion, and tokens should reinforce the selected representation rather than make a typical layout appear novel.
+- Keep the geometry of a primary object stable across rest, hover, focus, selection, and inline editing. State changes may reveal or restyle secondary controls, but must not move the object's label, resize its row, or shift neighboring content; reserve a shared slot or overlay transient UI instead.
 
 ## Domain-specific distinction
 
@@ -36,4 +37,3 @@ After a principle has been exercised in a real screen with representative data a
 2. State the exact rule and scope; do not lock a vague aesthetic preference.
 3. Get explicit product/design agreement in the relevant decision record.
 4. Mark the principle `Locked` only after the review, and route later exceptions through an explicit change or supersession decision.
-

@@ -19,12 +19,22 @@ describe("deep hierarchy identity budget", () => {
 
     const branches = Array.from(document.querySelectorAll<HTMLElement>(".tree-branch[data-depth]"));
     const offsets = branches.map((branch) => Number.parseFloat(branch.style.getPropertyValue("--depth-offset")));
-    expect(offsets).toEqual([6, 8, 10, 12, 14, 16, 18, 20, 22]);
+    expect(offsets).toEqual([0, 22, 42, 60, 72, 80, 86, 92, 96]);
     expect(new Set(offsets).size).toBe(9);
+
+    const ownRail = (branch: HTMLElement): HTMLElement | null => {
+      const row = branch.querySelector<HTMLElement>(`[data-row-id="${branch.dataset.taskId}"]`);
+      return row?.querySelector<HTMLElement>(".branch-rail") ?? null;
+    };
+    expect(ownRail(branches[0])).toBeNull();
+    expect(branches.slice(1).every((branch) => ownRail(branch) !== null)).toBe(true);
+    expect(ownRail(branches.at(-1)!)).toHaveClass("is-last-visible-child");
 
     const deepRow = document.querySelector<HTMLElement>("[data-row-id='deep-task-8']");
     expect(deepRow).toBeInTheDocument();
-    expect(deepRow?.querySelector<HTMLElement>(".branch-rail")?.style.marginLeft).toBe("22px");
+    expect(deepRow?.querySelector<HTMLElement>(".branch-rail")?.style.marginLeft).toBe("96px");
+    expect(deepRow?.querySelector(".task-copy")).toHaveClass("is-child-leaf");
+    expect(getComputedStyle(deepRow?.querySelector(".task-copy") as HTMLElement).paddingLeft).toBe("42px");
 
     await userEvent.click(document.querySelector<HTMLElement>("[data-timeline-cell='deep-task-8']")!);
     const selectedTitle = deepRow?.querySelector<HTMLElement>(".task-title");
@@ -37,7 +47,7 @@ describe("deep hierarchy identity budget", () => {
 
     const styles = loadedStyles();
     expect(styles).toContain("--selected-action-width: 124px");
-    expect(styles).toMatch(/\.history-row\.task-row \.row-actions\s*\{[^}]*top:\s*auto[^}]*height:\s*24px/);
-    expect(styles).toMatch(/\.history-row\.task-row\.is-selected \.current-identity[^}]*padding-right:\s*8px/);
+    expect(styles).toMatch(/\.history-row\.task-row \.row-actions\s*\{[^}]*top:\s*0[^}]*bottom:\s*0[^}]*height:\s*100%/);
+    expect(styles).toMatch(/\.history-row\.task-row:not\(\.is-editing\):hover \.current-identity,[^}]*\.history-row\.task-row:not\(\.is-editing\)\.is-selected \.current-identity[^}]*padding-right:\s*var\(--selected-action-width\)/);
   });
 });

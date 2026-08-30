@@ -37,6 +37,7 @@ import {
   type CompletedPocketMember,
   type CompletedPocketWindowState,
 } from "./completedPocketWindow";
+import { MemoLiveEditor } from "./MemoLiveEditor";
 import { UpdateReceipt, type UpdateReceiptState } from "./UpdateReceipt";
 import "./index.css";
 
@@ -360,21 +361,57 @@ type HistoryPocketProps = {
   onLoadMore: () => void;
 };
 
-const COMPLETED_DISTRIBUTION_BUCKETS = 12;
+function pocketMarkPosition(geometry: LifetimeGeometry): { left: number; width?: number } {
+  if (geometry.kind === "before") return { left: 0 };
+  if (geometry.kind === "after") return { left: 98 };
+  if (geometry.kind === "interval") return { left: geometry.left ?? 0, width: geometry.width ?? 0 };
+  return { left: geometry.left ?? 0 };
+}
 
-function completedPocketDistribution(members: HierarchyEntry[], range: RangeView): number[] {
-  const buckets = Array.from({ length: COMPLETED_DISTRIBUTION_BUCKETS }, () => 0);
-  const span = Math.max(1, range.endMs - range.startMs);
-  for (const member of members) {
-    const createdMs = Date.parse(member.task.createdAt);
-    const completedMs = member.task.completedAt ? Date.parse(member.task.completedAt) : createdMs;
-    const timestamp = Number.isFinite(completedMs) ? completedMs : createdMs;
-    const clamped = Math.min(range.endMs, Math.max(range.startMs, Number.isFinite(timestamp) ? timestamp : range.startMs));
-    const position = (clamped - range.startMs) / span;
-    const index = Math.min(COMPLETED_DISTRIBUTION_BUCKETS - 1, Math.max(0, Math.floor(position * COMPLETED_DISTRIBUTION_BUCKETS)));
-    buckets[index] += 1;
-  }
-  return buckets;
+function pocketMarkClass(geometry: LifetimeGeometry, selected: boolean): string {
+  return [
+    "pocket-mark",
+    selected ? "is-selected" : "",
+    geometry.kind === "interval" ? "is-interval" : `is-${geometry.kind}`,
+    "is-closed",
+    geometry.clippedLeft ? "is-clipped-left" : "",
+    geometry.clippedRight ? "is-clipped-right" : "",
+    geometry.missingEnd ? "is-warning" : "",
+  ].filter(Boolean).join(" ");
+}
+
+type PocketMarkProps = {
+  entry: HierarchyEntry;
+  geometry: LifetimeGeometry;
+  selected: boolean;
+};
+
+function PocketMark({ entry, geometry, selected }: PocketMarkProps): ReactElement {
+  const position = pocketMarkPosition(geometry);
+  const marker = geometry.kind === "before"
+    ? "◁"
+    : geometry.kind === "after"
+      ? "▷"
+      : geometry.missingEnd
+        ? "△"
+        : "■";
+  return <span
+    id={`history-mark-${entry.task.id}`}
+    className={pocketMarkClass(geometry, selected)}
+    data-history-mark={entry.task.id}
+    data-timeline-cell={entry.task.id}
+    data-lifetime-kind={geometry.kind}
+    data-start-ms={Date.parse(entry.task.createdAt)}
+    data-end-ms={entry.task.completedAt ? Date.parse(entry.task.completedAt) : "missing"}
+    style={{ left: `${position.left}%`, ...(position.width === undefined ? {} : { width: `${position.width}%` }) }}
+  >
+    {geometry.kind === "interval" ? <>
+      <span className="pocket-lifetime-start" aria-hidden="true" />
+      {geometry.clippedLeft && <span className="clip-chevron clip-left pocket-clip-chevron" aria-hidden="true">‹</span>}
+      {geometry.clippedRight && <span className="clip-chevron clip-right pocket-clip-chevron" aria-hidden="true">›</span>}
+      <span className="pocket-lifetime-end" aria-hidden="true" />
+    </> : marker}
+  </span>;
 }
 
 function HistoryPocket({ root, members, range, nowMs, expanded, windowState, selectedTaskId, onSelect, onToggle, onLoadMore }: HistoryPocketProps): ReactElement {
@@ -383,17 +420,17 @@ function HistoryPocket({ root, members, range, nowMs, expanded, windowState, sel
   const memberRecords = members.map((entry) => ({ id: entry.task.id, entry }));
   const projection = projectCompletedPocketWindow(memberRecords, windowState, selectedTaskId ?? undefined);
   const activeMemberId = projection.rendered.some(({ member }) => member.id === selectedTaskId) ? `history-member-row-${selectedTaskId}` : undefined;
-  const distribution = completedPocketDistribution(members, range);
-  const distributionPeak = Math.max(1, ...distribution);
+  const rootGeometry = lifetimeGeometry(root, range.startMs, range.endMs, nowMs);
+  const rootLifetimeLabel = timelineDescription(root, nowMs);
+  const toggleLabel = expanded ? `表示 ${projection.visiblePrefixCount}件。折りたたむ` : "展開して各タスクの期間を表示";
   return <div className={`history-pocket ${expanded ? "is-expanded" : ""} ${members.some((entry) => entry.task.id === selectedTaskId) ? "is-selected" : ""}`} data-pocket-id={root.task.id}>
-    <button id={`history-pocket-caption-${root.task.id}`} data-focus-id={`history-pocket-caption:${root.task.id}`} type="button" className="pocket-caption" tabIndex={-1} onMouseDown={(event) => event.preventDefault()} onClick={() => onToggle(root.task.id)} aria-label={`${rootLabel}。${expanded ? `表示 ${projection.visiblePrefixCount}件。折りたたむ` : "期間分布を確認。展開"}`} aria-expanded={expanded} aria-controls={expanded ? lanesId : undefined}>
+    <button id={`history-pocket-caption-${root.task.id}`} data-focus-id={`history-pocket-caption:${root.task.id}`} type="button" className="pocket-caption" tabIndex={-1} onMouseDown={(event) => event.preventDefault()} onClick={() => onToggle(root.task.id)} aria-label={`${rootLabel}。${rootLifetimeLabel} ${toggleLabel}`} aria-expanded={expanded} aria-controls={expanded ? lanesId : undefined}>
       <span className="pocket-caption-chevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
       <span className="pocket-caption-title">{root.task.title}</span>
       <span className="pocket-caption-count">{members.length}件</span>
     </button>
-    {!expanded && <div className="pocket-summary" role="img" aria-label={`${rootLabel}の期間分布`}>
-      <span className="pocket-summary-kicker" aria-hidden="true">分布</span>
-      <span className="pocket-summary-rail" aria-hidden="true">{distribution.map((count, index) => <span key={index} className="pocket-summary-bucket" data-bucket-count={count} style={{ left: `${(index / COMPLETED_DISTRIBUTION_BUCKETS) * 100}%`, height: `${Math.max(3, (count / distributionPeak) * 100)}%` }} />)}</span>
+    {!expanded && <div className="pocket-summary" role="img" aria-label={`${rootLabel}。${rootLifetimeLabel}`}>
+      <span className="pocket-summary-rail" aria-hidden="true"><PocketMark entry={root} geometry={rootGeometry} selected={selectedTaskId === root.task.id} /></span>
     </div>}
     {expanded && (
       <div id={lanesId} className="pocket-lanes" role="listbox" aria-label={rootLabel} aria-activedescendant={activeMemberId}>
@@ -428,7 +465,7 @@ function HistoryPocket({ root, members, range, nowMs, expanded, windowState, sel
             }}
           >
             <div className="pocket-member-track" aria-hidden="true">
-              <span id={`history-mark-${entry.task.id}`} className={`pocket-mark ${selectedTaskId === entry.task.id ? "is-selected" : ""} ${geometry.kind !== "interval" ? `is-${geometry.kind}` : ""} ${geometry.kind === "point" ? "is-closed" : ""} ${geometry.missingEnd ? "is-warning" : ""}`} data-history-mark={entry.task.id} data-timeline-cell={entry.task.id} data-start-ms={Date.parse(entry.task.createdAt)} data-end-ms={entry.task.completedAt ? Date.parse(entry.task.completedAt) : "missing"} style={{ left: `${position}%`, ...(geometry.kind === "interval" ? { width: `${width}%` } : {}) }}>{geometry.kind === "before" ? "◁" : geometry.kind === "after" ? "▷" : geometry.missingEnd ? "△" : geometry.kind === "point" ? "■" : "■"}</span>
+              <PocketMark entry={entry} geometry={geometry} selected={selectedTaskId === entry.task.id} />
               <span className="pocket-member-title" style={{ left: `${titleLeft}%`, paddingLeft: `${Math.min(relativeDepth, 8) * 10}px` }}><span className="pocket-member-branch">{relativeDepth > 0 ? "└" : "•"}</span>{entry.task.title}</span>
             </div>
           </div>;
@@ -445,11 +482,11 @@ function isRemaining(entry: HierarchyEntry): boolean {
 }
 
 function boundedDepthOffset(depth: number): number {
-  // Keep all nine supported depth cues distinct while reserving enough of the
-  // narrow identity plane for a selected title.  The branch elbow still grows
-  // through the same bounded CSS clamp, but remains subordinate to identity
-  // even at the narrowest supported viewport.
-  return Math.min(Math.max(depth, 0), 8) * 2 + 6;
+  // The first child needs a legible relationship to its parent.  After the
+  // first three levels, compress the increments so a depth-eight task still
+  // has room for its title in the narrowest supported identity plane.
+  const offsets = [0, 22, 42, 60, 72, 80, 86, 92, 96];
+  return offsets[Math.min(Math.max(Math.floor(depth), 0), 8)] ?? 0;
 }
 
 function stateLabel(state: TaskSnapshot["state"]): string {
@@ -591,26 +628,24 @@ type MemoDialogProps = {
 
 function MemoDialog({ editor, pending, onDraftChange, onSave, onCancel, onReload, onRetry }: MemoDialogProps): ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [compositionActive, setCompositionActive] = useState(false);
   const scalarCount = memoScalarLength(editor.draft);
   const overLimit = scalarCount > MEMO_SCALAR_LIMIT;
   const staleOrMissing = editor.reloadRequired || editor.missing;
   const canRetryPersistence = editor.error?.code === "persistence-failure";
 
-  useEffect(() => {
-    textareaRef.current?.focus();
-  }, [editor.taskId]);
-
   const trapFocus = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
-      if (!pending) {
+      const composing = dialogRef.current?.querySelector<HTMLElement>("[data-memo-composing='true']") !== null;
+      if (!pending && !composing) {
         event.preventDefault();
         onCancel();
       }
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), textarea:not([disabled])") ?? []);
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), [contenteditable='true']:not([aria-disabled='true'])") ?? []);
     if (focusable.length === 0) {
       event.preventDefault();
       dialogRef.current?.focus();
@@ -619,12 +654,16 @@ function MemoDialog({ editor, pending, onDraftChange, onSave, onCancel, onReload
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
     const active = document.activeElement;
-    if (event.shiftKey && (active === first || active === dialogRef.current)) {
+    const activeIndex = focusable.indexOf(active as HTMLElement);
+    if (event.shiftKey) {
       event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && active === last) {
+      (activeIndex <= 0 ? last : focusable[activeIndex - 1]).focus();
+    } else if (active === dialogRef.current || activeIndex === -1 || activeIndex === focusable.length - 1) {
       event.preventDefault();
       first.focus();
+    } else {
+      event.preventDefault();
+      focusable[activeIndex + 1].focus();
     }
   }, [onCancel, pending]);
 
@@ -635,27 +674,27 @@ function MemoDialog({ editor, pending, onDraftChange, onSave, onCancel, onReload
   }, []);
 
   return <div className="memo-modal-backdrop" data-memo-modal="true" onPointerDown={handleBackdropPointerDown} onClick={handleBackdropPointerDown}>
-    <div ref={dialogRef} className="memo-dock" role="dialog" aria-modal="true" aria-labelledby="memo-dialog-title" aria-describedby="memo-dialog-description" tabIndex={-1} onKeyDown={trapFocus}>
+    <div ref={dialogRef} className={`memo-dock ${expanded ? "is-expanded" : ""}`} data-memo-size={expanded ? "expanded" : "ordinary"} role="dialog" aria-modal="true" aria-labelledby="memo-dialog-title" aria-describedby="memo-dialog-description" tabIndex={-1} onKeyDown={trapFocus}>
       <div className="memo-dock-header">
         <div className="memo-origin-cue" aria-hidden="true"><span>NOW</span><span className="memo-origin-arrow">→</span></div>
         <div className="memo-dock-heading">
           <span className="memo-dock-kicker">現在側のメモ</span>
           <h2 id="memo-dialog-title">{editor.title}のメモ</h2>
         </div>
-        <span className="memo-origin-label">{editor.originLabel}</span>
+        <div className="memo-dock-header-actions">
+          <span className="memo-origin-label">{editor.originLabel}</span>
+          <button
+            type="button"
+            className="memo-size-action"
+            aria-label={expanded ? "元のサイズに戻す" : "拡大表示"}
+            title={expanded ? "元のサイズに戻す" : "拡大表示"}
+            aria-pressed={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >{expanded ? "縮小" : "拡大"}</button>
+        </div>
       </div>
       <p id="memo-dialog-description" className="memo-dialog-description">{editor.originLabel}から開いています。内容は保存するまで変更されません。</p>
-      <label className="memo-textarea-label" htmlFor="memo-dialog-textarea">メモ本文</label>
-      <textarea
-        ref={textareaRef}
-        id="memo-dialog-textarea"
-        className="memo-textarea"
-        value={editor.draft}
-        onChange={(event) => onDraftChange(event.currentTarget.value)}
-        disabled={pending}
-        autoComplete="off"
-        spellCheck="false"
-      />
+      <MemoLiveEditor value={editor.draft} disabled={pending} onChange={onDraftChange} onCompositionChange={setCompositionActive} />
       <div className={`memo-scalar-count ${overLimit ? "is-invalid" : ""}`} data-memo-scalar-count={scalarCount} data-memo-scalar-limit={MEMO_SCALAR_LIMIT} role="status" aria-live="polite">
         文字数 {scalarCount} / {MEMO_SCALAR_LIMIT}（残り {Math.max(0, MEMO_SCALAR_LIMIT - scalarCount)}）
       </div>
@@ -667,8 +706,8 @@ function MemoDialog({ editor, pending, onDraftChange, onSave, onCancel, onReload
       </div>}
       {pending && <p className="memo-dialog-status is-pending" role="status">保存中…</p>}
       <div className="memo-dialog-actions">
-        <button type="button" className="quiet-action" onClick={onCancel} disabled={pending}>キャンセル</button>
-        <button type="button" className="memo-save-action" onClick={onSave} disabled={pending || overLimit || staleOrMissing}>{pending ? "保存中…" : "保存"}</button>
+        <button type="button" className="quiet-action" onClick={onCancel} disabled={pending || compositionActive}>キャンセル</button>
+        <button type="button" className="memo-save-action" onClick={onSave} disabled={pending || compositionActive || overLimit || staleOrMissing}>{pending ? "保存中…" : "保存"}</button>
       </div>
     </div>
   </div>;
@@ -1971,6 +2010,11 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
   const renderRow = (entry: HierarchyEntry): ReactElement => {
     const children = projectedChildrenOf(entries, entry.task.id);
     const remainingChildren = children.filter(isRemaining);
+    const hasChildren = children.length > 0;
+    const hasParent = Boolean(entry.parentTaskId);
+    const isStandalone = !hasChildren && !hasParent;
+    const siblingEntries = hasParent ? projectedChildrenOf(entries, entry.parentTaskId) : [];
+    const isLastVisibleChild = hasParent && siblingEntries.at(-1)?.task.id === entry.task.id;
     const disclosure = projectTaskDetailDisclosure(disclosureState, entry.task.id, availableTaskIds);
     const isSelected = disclosure.stableSelectionLink;
     const isCollapsed = collapsed.has(entry.task.id);
@@ -1985,24 +2029,41 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     const stateCueClass = entry.task.state === "active" ? "is-active" : entry.task.state === "paused" ? "is-paused" : "";
     const depthOffset = boundedDepthOffset(entry.depth);
     const depthStyle = { "--depth": entry.depth, "--depth-offset": `${depthOffset}px` } as CSSProperties;
-    return <div key={entry.task.id} id={`history-task-${entry.task.id}`} className={`tree-branch depth-${entry.depth} ${isCollapsed ? "is-collapsed" : ""}`} data-task-id={entry.task.id} data-depth={entry.depth} style={depthStyle} role="treeitem" aria-level={entry.depth + 1} aria-labelledby={`task-label-${entry.task.id}`} aria-describedby={`lifetime-description-${entry.task.id}`} aria-expanded={children.length > 0 ? !isCollapsed : undefined}>
+    const parentDepthOffset = hasParent
+      ? boundedDepthOffset(byId.get(entry.parentTaskId ?? "")?.depth ?? Math.max(0, entry.depth - 1))
+      : 0;
+    const childDepthStep = Math.max(0, depthOffset - parentDepthOffset);
+    // A leaf has no disclosure column by design.  Compensate inside its copy
+    // so its title still begins one clear level after the parent's title.  As
+    // depth spacing compresses, increase only this internal inset enough to
+    // preserve a visible distinction without restoring a phantom button.
+    const childLeafInset = hasParent && !hasChildren ? Math.max(26, 46 - childDepthStep) : undefined;
+    const hierarchyKind = hasChildren ? hasParent ? "parent-child" : "parent" : hasParent ? "child" : "standalone";
+    const hierarchyClasses = [
+      hasChildren ? "is-parent" : "",
+      hasParent ? "is-child" : "",
+      isStandalone ? "is-standalone" : "",
+      isLastVisibleChild ? "is-last-visible-child" : "",
+    ].filter(Boolean).join(" ");
+    const taskMetaId = `task-meta-description-${entry.task.id}`;
+    return <div key={entry.task.id} id={`history-task-${entry.task.id}`} className={`tree-branch depth-${entry.depth} ${hierarchyClasses} ${isCollapsed ? "is-collapsed" : ""}`} data-task-id={entry.task.id} data-depth={entry.depth} data-hierarchy-kind={hierarchyKind} data-has-children={hasChildren ? "true" : "false"} data-has-parent={hasParent ? "true" : "false"} data-last-visible-child={isLastVisibleChild ? "true" : undefined} style={depthStyle} role="treeitem" aria-level={entry.depth + 1} aria-labelledby={`task-label-${entry.task.id}`} aria-describedby={`lifetime-description-${entry.task.id} ${taskMetaId}`} aria-expanded={children.length > 0 ? !isCollapsed : undefined}>
       {dragState && <div className={`drop-seam ${isCurrentBefore ? "is-current" : ""} ${beforeValidation?.valid ? "" : "is-invalid"}`} data-drop-target={`before:${entry.task.id}`} data-drop-kind="before" data-drop-parent-id={entry.parentTaskId ?? ""} data-drop-before-id={entry.task.id} data-drop-label={beforePlacement.label} aria-label={`${entry.task.title} の前に配置`} aria-disabled={!beforeValidation?.valid}>
         <span aria-hidden={!isCurrentBefore}>{beforeValidation?.valid ? (dragState.taskId === entry.task.id ? "移動元" : "ここに挿入") : `⛔ ${beforeValidation?.reason}`}</span>
       </div>}
-      <div className={`history-row task-row ${dragState?.taskId === entry.task.id ? "is-dragging" : ""} ${isSelected ? "is-selected" : ""} ${editing ? "is-editing" : ""} ${stateCueClass}`} data-row-id={entry.task.id} data-state={entry.task.state} data-disclosure-state={isSelected ? "selected" : "resting"} onFocusCapture={() => focusTask(entry.task.id)}>
+      <div className={`history-row task-row ${dragState?.taskId === entry.task.id ? "is-dragging" : ""} ${isSelected ? "is-selected" : ""} ${editing ? "is-editing" : ""} ${stateCueClass} ${hierarchyClasses}`} data-row-id={entry.task.id} data-state={entry.task.state} data-disclosure-state={isSelected ? "selected" : "resting"} data-hierarchy-kind={hierarchyKind} data-has-children={hasChildren ? "true" : "false"} data-has-parent={hasParent ? "true" : "false"} data-direct-child-count={hasChildren ? children.length : undefined} data-incomplete-child-count={hasChildren ? remainingChildren.length : undefined} onFocusCapture={() => focusTask(entry.task.id)}>
         <HistoryMark entry={entry} range={rangeView} nowMs={displayNowMs} selected={isSelected} ancestryPath={isSelected && entry.depth > 0 ? pathLabel(entry, byId) : undefined} onSelect={selectTask} onFit={fitSelected} />
         <div className={`now-hinge-cell ${isRemaining(entry) && rangeView.endMs < displayNowMs ? "is-discontinuous" : ""}`} aria-hidden="true">{isRemaining(entry) && rangeView.endMs < displayNowMs && <span>▷</span>}</div>
         <div className={`current-identity ${dragState ? `is-drop-target ${dropValidation?.valid ? "is-valid" : "is-invalid"} ${isCurrentParent ? "is-current" : ""}` : ""}`} data-drop-target={dragState ? `parent:${entry.task.id}` : undefined} data-drop-kind={dragState ? "parent" : undefined} data-drop-parent-id={dragState ? entry.task.id : undefined} data-drop-label={dragState ? dropPlacement.label : undefined} aria-label={dragState ? (dropValidation?.valid ? `${entry.task.title}の子の末尾に配置` : `${entry.task.title}には配置できません: ${dropValidation?.reason ?? "不正な移動先"}`) : undefined} aria-disabled={dragState ? !dropValidation?.valid : undefined} onClick={() => selectTask(entry.task.id)}>
           {dragState && isCurrentParent && <span className="identity-drop-cue" aria-hidden="true">{dropValidation?.valid ? `└ ${entry.task.title} の子の末尾` : `⛔ ${dropValidation?.reason ?? "配置できません"}`}</span>}
-          <span className="branch-rail" aria-hidden="true" style={{ marginLeft: `${depthOffset}px` }} />
+          {hasParent && <span className={`branch-rail ${isLastVisibleChild ? "is-last-visible-child" : ""}`} aria-hidden="true" style={{ marginLeft: `${depthOffset}px` }} />}
           <button type="button" className="drag-handle" aria-label={`${entry.task.title}をドラッグして移動（EnterまたはSpaceでキーボード配置）`} data-drag-handle="true" data-focus-id={`drag-handle:${entry.task.id}`} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); beginKeyboardMove(entry); } }} onPointerDown={(event) => startPointerDrag(event, entry)} onPointerMove={(event) => updatePointerTarget(event, entry)} onPointerUp={(event) => finishPointerDrag(event, entry)} onPointerCancel={(event) => cancelDrag(entry, event.pointerId)} onLostPointerCapture={() => cancelDrag(entry)} disabled={pending !== null || forest?.truncated}>⠿</button>
-          {children.length > 0 ? <button type="button" className="disclosure" aria-label={`${entry.task.title}を${isCollapsed ? "展開" : "折りたたむ"}`} aria-expanded={!isCollapsed} onClick={() => toggleCollapse(entry.task.id)}>{isCollapsed ? "▸" : "▾"}</button> : <span className="disclosure-spacer" aria-hidden="true" />}
-          <button type="button" className={`completion-box ${isCompleting ? "is-pending" : ""}`} data-focus-id={`complete:${entry.task.id}`} aria-label={isCompleting ? `${entry.task.title}を完了処理中` : `${entry.task.title}を完了にする`} onClick={() => void complete(entry)} disabled={pending !== null}><span className="completion-glyph" aria-hidden="true">{isCompleting ? "···" : "✓"}</span><span className="completion-intent" aria-hidden="true">{isCompleting ? "完了処理中" : "完了"}</span></button>
-          <div className="task-copy">
+          <button type="button" className={`completion-box ${isCompleting ? "is-pending" : ""}`} data-completion-state={isCompleting ? "pending" : "incomplete"} data-focus-id={`complete:${entry.task.id}`} aria-label={isCompleting ? `${entry.task.title}を完了処理中` : `${entry.task.title}を完了にする`} aria-busy={isCompleting ? "true" : undefined} onClick={() => void complete(entry)} disabled={pending !== null}><span className={`completion-glyph ${isCompleting ? "is-processing" : "is-empty"}`} aria-hidden="true">{isCompleting ? "…" : null}</span><span className="completion-intent" aria-hidden="true">{isCompleting ? "完了処理中" : "完了"}</span></button>
+          <div className={`task-copy ${hasChildren ? "has-disclosure" : "no-disclosure"} ${childLeafInset === undefined ? "" : "is-child-leaf"}`} style={childLeafInset === undefined ? undefined : { "--leaf-title-inset": `${childLeafInset}px`, paddingLeft: `${childLeafInset}px` } as CSSProperties}>
+            {children.length > 0 && <button type="button" className="disclosure" aria-label={`${entry.task.title}を${isCollapsed ? "展開" : "折りたたむ"}`} aria-expanded={!isCollapsed} onClick={() => toggleCollapse(entry.task.id)}>{isCollapsed ? "▸" : "▾"}</button>}
             {editing ? <form ref={renameFormRef} className="rename-form" onBlur={(event) => { const next = event.relatedTarget; if (next instanceof Node && event.currentTarget.contains(next)) return; requestOutsideRename(entry, editingTitleRef.current); }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTaskId(null); } }} onSubmit={(event) => { event.preventDefault(); void saveRename(entry); }}><input id={`task-label-${entry.task.id}`} aria-label={`${entry.task.title}の名前を変更`} defaultValue={entry.task.title} onChange={(event) => { editingTitleRef.current = event.currentTarget.value; }} autoFocus maxLength={240} /><button type="submit" disabled={pending !== null}>保存</button><button type="button" onClick={() => setEditingTaskId(null)}>取消</button></form> : <button id={`task-label-${entry.task.id}`} type="button" className="task-title" data-focus-id={`title:${entry.task.id}`} onDoubleClick={() => beginRename(entry)} onClick={() => beginRename(entry)}>{entry.task.title}</button>}
-            <span className="task-meta"><span className={`state-dot state-${entry.task.state}`} aria-hidden="true" />{stateLabel(entry.task.state)}{isSelected && children.length > 0 && <span className="child-count">子 {remainingChildren.length}/{children.length}</span>}{isSelected && <span className={`memo-presence ${entry.task.memo ? "has-memo" : "is-empty"}`} data-memo-presence={entry.task.memo ? "present" : "empty"} title={entry.task.memo ? "メモあり" : "メモなし"}><span aria-hidden="true">{entry.task.memo ? "▣" : "□"}</span><span className="sr-only">{entry.task.memo ? "メモあり" : "メモなし"}</span></span>}</span>
+            <span id={taskMetaId} className="task-meta sr-only"><span className={`state-dot state-${entry.task.state}`} aria-hidden="true" />{stateLabel(entry.task.state)}{hasChildren && <span className="child-count" data-child-count={children.length} data-incomplete-child-count={remainingChildren.length}>子{children.length}・未完了{remainingChildren.length}</span>}{isSelected && <span className={`memo-presence ${entry.task.memo ? "has-memo" : "is-empty"}`} data-memo-presence={entry.task.memo ? "present" : "empty"} title={entry.task.memo ? "メモあり" : "メモなし"}><span aria-hidden="true">{entry.task.memo ? "▣" : "□"}</span><span className="sr-only">{entry.task.memo ? "メモあり" : "メモなし"}</span></span>}</span>
           </div>
-          <div className={`row-actions ${isSelected ? "is-disclosed" : ""} ${editing ? "is-suppressed" : ""}`} aria-hidden={!isSelected || editing || undefined}>
+          <div className={`row-actions ${isSelected ? "is-disclosed" : ""} ${editing ? "is-suppressed" : ""}`} aria-hidden={editing || undefined}>
             <button type="button" className="quiet-action memo-action" data-focus-id={`memo:${entry.task.id}`} aria-label={`${entry.task.title}のメモを編集`} tabIndex={isSelected ? 0 : -1} onClick={() => openMemo(entry)} disabled={pending !== null}>メモ</button>
             <button type="button" className="quiet-action child-action" data-focus-id={`add-child:${entry.task.id}`} tabIndex={isSelected ? 0 : -1} onClick={() => toggleCreateChild(entry)} disabled={pending !== null}>＋子</button>
             <button type="button" className="quiet-action delete-action" data-focus-id={`delete:${entry.task.id}`} tabIndex={isSelected ? 0 : -1} onClick={() => beginDelete(entry)} disabled={pending !== null}>削除</button>
