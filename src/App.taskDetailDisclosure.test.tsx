@@ -16,6 +16,20 @@ async function ready(): Promise<void> {
   await screen.findByRole("heading", { name: "NOW 残っている仕事" });
 }
 
+async function renderTypicalWithMemos(memos: Record<string, string>): Promise<void> {
+  const api = createFixtureTaskApi("typical");
+  const initial = await api.getTaskForest(5000);
+  vi.spyOn(api, "getTaskForest").mockResolvedValue({
+    ...initial,
+    entries: initial.entries.map((entry) => ({
+      ...entry,
+      task: { ...entry.task, memo: memos[entry.task.id] ?? entry.task.memo },
+    })),
+  });
+  render(<App api={api} />);
+  await ready();
+}
+
 function loadedStyles(): string {
   return Array.from(document.styleSheets).map((sheet) => {
     try { return Array.from(sheet.cssRules).map((rule) => rule.cssText).join("\n"); } catch { return ""; }
@@ -190,6 +204,80 @@ describe("task-detail-disclosure UI integration", () => {
     expect(document.querySelectorAll("[data-disclosure-state='selected']")).toHaveLength(1);
     expect(document.querySelector("[data-row-id='dense-task-32']")).toHaveAttribute("data-disclosure-state", "selected");
     expect(document.querySelectorAll(".row-actions")).toHaveLength(120);
+  });
+
+  it("shows resting memo presence beside the title without exposing the memo body", async () => {
+    const memoBody = "一覧には出さない本文";
+    await renderTypicalWithMemos({ "task-next-1": memoBody });
+
+    const presentRow = rowFor("再現条件をテストケースにする");
+    const emptyRow = rowFor("SQLite migrationの失敗ケースを確認");
+    const marker = presentRow.querySelector("[data-memo-presence='present']") as HTMLElement;
+
+    expect(presentRow).toHaveAttribute("data-disclosure-state", "resting");
+    expect(marker).toBeInTheDocument();
+    expect(marker).toHaveAttribute("role", "img");
+    expect(marker).toHaveAttribute("aria-label", "メモあり");
+    expect(marker).toHaveAttribute("title", "メモあり");
+    expect(presentRow).not.toHaveTextContent(memoBody);
+    expect(document.body).not.toHaveTextContent(memoBody);
+    expect(emptyRow.querySelector("[data-memo-presence]")).toBeNull();
+    expect(getComputedStyle(presentRow).height).toBe("46px");
+
+    await userEvent.click(timelineCell("task-next-1"));
+    expect(presentRow).toHaveAttribute("data-disclosure-state", "selected");
+    expect(presentRow.querySelector("[data-memo-presence='present']")).toBeInTheDocument();
+    expect(getComputedStyle(presentRow).height).toBe("46px");
+  });
+
+  it("shows memo presence for expanded completed members and selected detail without collapsed aggregation", async () => {
+    const memoBody = "完了タスクの本文は一覧に出さない";
+    await renderTypicalWithMemos({ "task-completed": memoBody });
+
+    const completedPocket = document.querySelector("[data-pocket-id='task-completed']") as HTMLElement;
+    expect(completedPocket.querySelector("[data-memo-presence]")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /ログのタイムアウト境界を確認の完了履歴/ }));
+    const member = document.querySelector("[data-history-member-id='task-completed']") as HTMLElement;
+    expect(member).toBeInTheDocument();
+    expect(member).toHaveAttribute("aria-label", expect.stringContaining("メモあり"));
+    expect(member.querySelector("[data-memo-presence='present']")).toBeInTheDocument();
+    expect(member).not.toHaveTextContent(memoBody);
+
+    await userEvent.click(member);
+    const detail = document.querySelector("[data-selected-readout='task-completed']") as HTMLElement;
+    await waitFor(() => expect(detail).toBeInTheDocument());
+    expect(detail.querySelector("[data-memo-presence='present']")).toBeInTheDocument();
+    expect(detail).not.toHaveTextContent(memoBody);
+    expect(document.body).not.toHaveTextContent(memoBody);
+
+    await userEvent.click(screen.getByRole("button", { name: /調査メモの表記を確認（記録なし完了）の完了履歴/ }));
+    const emptyMember = document.querySelector("[data-history-member-id='task-no-session']") as HTMLElement;
+    expect(emptyMember).toBeInTheDocument();
+    expect(emptyMember.querySelector("[data-memo-presence]")).toBeNull();
+  });
+
+  it("updates resting memo presence after save and clears it again after undo", async () => {
+    const api = createFixtureTaskApi("typical");
+    const title = "再現条件をテストケースにする";
+    const body = "保存後も本文は一覧に出さない";
+    render(<App api={api} />);
+    await ready();
+
+    const row = () => rowFor(title);
+    expect(row().querySelector("[data-memo-presence]")).toBeNull();
+    await userEvent.click(timelineCell("task-next-1"));
+    await userEvent.click(screen.getByRole("button", { name: `${title}のメモを編集` }));
+    fireEvent.change(screen.getByRole("textbox", { name: "メモ本文" }), { target: { value: body } });
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(row().querySelector("[data-memo-presence='present']")).toBeInTheDocument());
+    expect(row()).not.toHaveTextContent(body);
+    expect(document.body).not.toHaveTextContent(body);
+
+    await userEvent.click(screen.getByRole("button", { name: "元に戻す" }));
+    await waitFor(() => expect(row().querySelector("[data-memo-presence]")).toBeNull());
   });
 });
 

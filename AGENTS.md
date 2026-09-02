@@ -3,6 +3,7 @@
 ## Capability-locked UI workflow
 
 - Use `$capability-locked-ui` before implementing any new or substantially changed user-facing capability, screen flow, or interaction. A change is substantial when it changes a user outcome, domain state, persistence/history, error behavior, or interaction semantics.
+- ユーザーへの説明、承認依頼、Capability Change Request は、原則としてユーザーが使っている言語で書く。このプロジェクトでは日本語を基本とし、専門用語や英語の識別子には初出時に短い説明を添える。内部文書を作成しただけで済ませず、「何が変わるか」「なぜ確認が必要か」「承認すると何を行うか」を平易に要約してから、一文で回答方法を示す。
 - Small visual-only changes may skip capability implementation, but they must not edit locked capability contracts, locked core behavior, or existing contract tests. If a visual change reveals a behavior or contract gap, route it through the full workflow.
 - Keep capability definition and headless implementation independent from UI design exploration. A development harness may exercise the headless behavior, but it is not product UI and must not become a design reference.
 - For substantial UI, when delegation is available, assign capability implementation and design exploration to different agents or contexts. This is an anti-anchoring boundary, not merely workload distribution: the design explorer receives the Capability Pack and established design context, not implementation reasoning, guessed controls, or the temporary harness. If delegation is unavailable, perform an explicit isolated design pass after lock with those same inputs and exclusions.

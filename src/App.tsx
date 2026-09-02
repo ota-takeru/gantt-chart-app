@@ -1,4 +1,4 @@
-import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactElement, type Ref } from "react";
 import packageMetadata from "../package.json";
 import { createFixtureTaskApi, previewVariantFromLocation, type PreviewVariant } from "./api/fixtureTaskApi";
 import { createFixtureUpdateApi } from "./api/fixtureUpdateApi";
@@ -18,6 +18,7 @@ import {
 } from "./api/types";
 import {
   projectTaskDetailDisclosure,
+  projectTaskMemoPresence,
   transitionTaskDetailDisclosure,
   type TaskDetailDisclosureIntent,
   type TaskDetailDisclosureState,
@@ -37,6 +38,7 @@ import {
   type CompletedPocketMember,
   type CompletedPocketWindowState,
 } from "./completedPocketWindow";
+import { projectTaskIdentityPaletteIndex } from "./taskIdentityPalette";
 import { MemoLiveEditor } from "./MemoLiveEditor";
 import { UpdateReceipt, type UpdateReceiptState } from "./UpdateReceipt";
 import "./index.css";
@@ -254,13 +256,14 @@ type TimelineRulerProps = {
   completedCount: number;
   onCurrentJump: () => void;
   onHistoryJump: () => void;
+  rulerRef?: Ref<HTMLDivElement>;
 };
 
-function TimelineRuler({ range, nowMs, remainingCount, completedCount, onCurrentJump, onHistoryJump }: TimelineRulerProps): ReactElement {
+function TimelineRuler({ range, nowMs, remainingCount, completedCount, onCurrentJump, onHistoryJump, rulerRef }: TimelineRulerProps): ReactElement {
   const ticks = rulerTicks(range.startMs, range.endMs, nowMs, range.anchoredNow);
   const nowIsBeyondPlot = nowMs > range.endMs;
   const rangeLabel = range.anchoredNow ? `表示範囲 開始 ${formatBounds(range.startMs)} 現在 ${formatBounds(range.endMs)}` : `表示範囲 開始 ${formatBounds(range.startMs)} 終了 ${formatBounds(range.endMs)}`;
-  return <div className="history-ruler-grid timeline-ruler" data-range-start-ms={range.startMs} data-range-end-ms={range.endMs} data-now-ms={nowMs}>
+  return <div ref={rulerRef} className="history-ruler-grid timeline-ruler" data-range-start-ms={range.startMs} data-range-end-ms={range.endMs} data-now-ms={nowMs}>
     <div className="history-ruler-cell">
       <span className="ruler-side-label" aria-hidden="true">過去 / 履歴</span>
       <div className="ruler-ticks" aria-hidden="true">{ticks.map((tick, index) => <span key={`${tick.left}-${index}`} className="ruler-tick" style={{ left: `${tick.left}%` }}>{tick.label}</span>)}</div>
@@ -318,6 +321,13 @@ const InlineSubtaskForm = memo(function InlineSubtaskForm({ parentTaskId, parent
     <button type="button" onClick={onCancel}>取消</button>
   </form>;
 });
+
+function MemoPresenceMark(): ReactElement {
+  return <span className="memo-presence has-memo" data-memo-presence="present" role="img" aria-label="メモあり" title="メモあり">
+    <span aria-hidden="true">▣</span>
+    <span className="sr-only">メモあり</span>
+  </span>;
+}
 
 function HistoryMark({ entry, range, nowMs, selected, ancestryPath, onSelect, onFit }: HistoryMarkProps): ReactElement {
   const geometry = lifetimeGeometry(entry, range.startMs, range.endMs, nowMs);
@@ -416,6 +426,7 @@ function PocketMark({ entry, geometry, selected }: PocketMarkProps): ReactElemen
 
 function HistoryPocket({ root, members, range, nowMs, expanded, windowState, selectedTaskId, onSelect, onToggle, onLoadMore }: HistoryPocketProps): ReactElement {
   const rootLabel = `${root.task.title}の完了履歴 ${members.length}件`;
+  const rootIdentityPaletteIndex = projectTaskIdentityPaletteIndex(root.task.id);
   const lanesId = `history-pocket-lanes-${root.task.id}`;
   const memberRecords = members.map((entry) => ({ id: entry.task.id, entry }));
   const projection = projectCompletedPocketWindow(memberRecords, windowState, selectedTaskId ?? undefined);
@@ -423,8 +434,8 @@ function HistoryPocket({ root, members, range, nowMs, expanded, windowState, sel
   const rootGeometry = lifetimeGeometry(root, range.startMs, range.endMs, nowMs);
   const rootLifetimeLabel = timelineDescription(root, nowMs);
   const toggleLabel = expanded ? `表示 ${projection.visiblePrefixCount}件。折りたたむ` : "展開して各タスクの期間を表示";
-  return <div className={`history-pocket ${expanded ? "is-expanded" : ""} ${members.some((entry) => entry.task.id === selectedTaskId) ? "is-selected" : ""}`} data-pocket-id={root.task.id}>
-    <button id={`history-pocket-caption-${root.task.id}`} data-focus-id={`history-pocket-caption:${root.task.id}`} type="button" className="pocket-caption" tabIndex={-1} onMouseDown={(event) => event.preventDefault()} onClick={() => onToggle(root.task.id)} aria-label={`${rootLabel}。${rootLifetimeLabel} ${toggleLabel}`} aria-expanded={expanded} aria-controls={expanded ? lanesId : undefined}>
+  return <div className={`history-pocket ${expanded ? "is-expanded" : ""} ${members.some((entry) => entry.task.id === selectedTaskId) ? "is-selected" : ""}`} data-pocket-id={root.task.id} data-task-identity-palette={rootIdentityPaletteIndex}>
+    <button id={`history-pocket-caption-${root.task.id}`} data-focus-id={`history-pocket-caption:${root.task.id}`} data-task-identity-palette={rootIdentityPaletteIndex} type="button" className="pocket-caption" tabIndex={-1} onMouseDown={(event) => event.preventDefault()} onClick={() => onToggle(root.task.id)} aria-label={`${rootLabel}。${rootLifetimeLabel} ${toggleLabel}`} aria-expanded={expanded} aria-controls={expanded ? lanesId : undefined}>
       <span className="pocket-caption-chevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
       <span className="pocket-caption-title">{root.task.title}</span>
       <span className="pocket-caption-count">{members.length}件</span>
@@ -441,7 +452,9 @@ function HistoryPocket({ root, members, range, nowMs, expanded, windowState, sel
           const width = geometry.kind === "interval" ? geometry.width ?? 0 : 0;
           const relativeDepth = Math.max(0, entry.depth - root.depth);
           const titleLeft = geometry.kind === "interval" ? Math.min(66, position + width + 2) : 4;
-          const markerLabel = `${entry.task.title}。${timelineDescription(entry, nowMs)}`;
+          const identityPaletteIndex = projectTaskIdentityPaletteIndex(entry.task.id);
+          const memoPresence = projectTaskMemoPresence(entry.task.memo !== "");
+          const markerLabel = `${entry.task.title}。${timelineDescription(entry, nowMs)}${memoPresence.showMemoPresence ? "。メモあり" : ""}`;
           return <div
             key={entry.task.id}
             id={`history-member-row-${entry.task.id}`}
@@ -466,7 +479,7 @@ function HistoryPocket({ root, members, range, nowMs, expanded, windowState, sel
           >
             <div className="pocket-member-track" aria-hidden="true">
               <PocketMark entry={entry} geometry={geometry} selected={selectedTaskId === entry.task.id} />
-              <span className="pocket-member-title" style={{ left: `${titleLeft}%`, paddingLeft: `${Math.min(relativeDepth, 8) * 10}px` }}><span className="pocket-member-branch">{relativeDepth > 0 ? "└" : "•"}</span>{entry.task.title}</span>
+              <span className={`pocket-member-title ${memoPresence.showMemoPresence ? "has-memo" : ""}`} data-task-identity-palette={identityPaletteIndex} style={{ left: `${titleLeft}%`, paddingLeft: `${Math.min(relativeDepth, 8) * 10}px` }}><span className="pocket-member-branch">{relativeDepth > 0 ? "└" : "•"}</span>{entry.task.title}{memoPresence.showMemoPresence && <MemoPresenceMark />}</span>
             </div>
           </div>;
         })}
@@ -769,6 +782,9 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
   const [focusReturnId, setFocusReturnId] = useState<string | null>(null);
   const liveStatusRef = useRef<HTMLParagraphElement>(null);
   const keyboardPlacementRef = useRef<HTMLDivElement>(null);
+  const workSurfaceRef = useRef<HTMLElement>(null);
+  const compactToplineRef = useRef<HTMLElement>(null);
+  const timelineRulerRef = useRef<HTMLDivElement>(null);
   const historyCompositeRef = useRef<HTMLDivElement>(null);
   const historySurfaceRef = useRef<HTMLElement>(null);
   const rangeSelectRef = useRef<HTMLSelectElement>(null);
@@ -873,6 +889,32 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
       keyboardPlacementRef.current?.focus({ preventScroll: true });
     }
   }, [keyboardPlacement.phase]);
+
+  useLayoutEffect(() => {
+    const surface = workSurfaceRef.current;
+    const header = compactToplineRef.current;
+    if (!surface || !header) return;
+    const ruler = timelineRulerRef.current;
+    const updateMeasuredHeights = () => {
+      const measured = [
+        [header, "--compact-topline-height"],
+        [ruler, "--timeline-ruler-height"],
+      ] as const;
+      for (const [element, property] of measured) {
+        if (!element) continue;
+        const height = Math.ceil(element.getBoundingClientRect().height);
+        if (!Number.isFinite(height) || height <= 0) continue;
+        const cssHeight = `${height}px`;
+        if (surface.style.getPropertyValue(property) !== cssHeight) surface.style.setProperty(property, cssHeight);
+      }
+    };
+    updateMeasuredHeights();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateMeasuredHeights);
+    observer.observe(header);
+    if (ruler) observer.observe(ruler);
+    return () => observer.disconnect();
+  }, [forest !== null]);
 
   useEffect(() => {
     if (!deleteConfirm) return;
@@ -1901,6 +1943,7 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
   }, [membersForPocket]);
 
   const renderCompletedDetail = (entry: HierarchyEntry): ReactElement => {
+    const memoPresence = projectTaskMemoPresence(entry.task.memo !== "");
     const actualHistory = actualHistoryByTask[entry.task.id];
     const actualWorkReadout = !actualHistory || actualHistory.status === "loading"
       ? <span className="actual-history-status" data-actual-history-state="loading" role="status">実作業時間を読み込み中…</span>
@@ -1912,7 +1955,7 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     return <div className="history-detail-row history-detail-row-local" data-local-detail-for={entry.task.id} data-completed-task-context={entry.task.id}>
       <div className="history-detail" aria-label={`${pathLabel(entry, byId)}の完了履歴詳細`} data-selected-readout={entry.task.id}>
         <div className="history-detail-summary">
-          <strong>{entry.task.title}</strong>
+          <strong>{entry.task.title}{memoPresence.showMemoPresence && <MemoPresenceMark />}</strong>
           <span className="history-detail-path" data-history-detail-path={entry.task.id} title={pathLabel(entry, byId)}>階層 {pathLabel(entry, byId)}</span>
           <span>{entry.task.completedAt ? `作成 ${formatExact(entry.task.createdAt)} → 完了 ${formatExact(entry.task.completedAt)}` : `作成 ${formatExact(entry.task.createdAt)} → 完了時刻なし`}</span>
           {actualWorkReadout}
@@ -2017,6 +2060,8 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
     const isLastVisibleChild = hasParent && siblingEntries.at(-1)?.task.id === entry.task.id;
     const disclosure = projectTaskDetailDisclosure(disclosureState, entry.task.id, availableTaskIds);
     const isSelected = disclosure.stableSelectionLink;
+    const memoPresence = projectTaskMemoPresence(entry.task.memo !== "");
+    const identityPaletteIndex = projectTaskIdentityPaletteIndex(entry.task.id);
     const isCollapsed = collapsed.has(entry.task.id);
     const editing = editingTaskId === entry.task.id;
     const dropPlacement: Placement = { label: `${pathLabel(entry, byId)} の子の末尾`, parentTaskId: entry.task.id };
@@ -2050,18 +2095,18 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
       {dragState && <div className={`drop-seam ${isCurrentBefore ? "is-current" : ""} ${beforeValidation?.valid ? "" : "is-invalid"}`} data-drop-target={`before:${entry.task.id}`} data-drop-kind="before" data-drop-parent-id={entry.parentTaskId ?? ""} data-drop-before-id={entry.task.id} data-drop-label={beforePlacement.label} aria-label={`${entry.task.title} の前に配置`} aria-disabled={!beforeValidation?.valid}>
         <span aria-hidden={!isCurrentBefore}>{beforeValidation?.valid ? (dragState.taskId === entry.task.id ? "移動元" : "ここに挿入") : `⛔ ${beforeValidation?.reason}`}</span>
       </div>}
-      <div className={`history-row task-row ${dragState?.taskId === entry.task.id ? "is-dragging" : ""} ${isSelected ? "is-selected" : ""} ${editing ? "is-editing" : ""} ${stateCueClass} ${hierarchyClasses}`} data-row-id={entry.task.id} data-state={entry.task.state} data-disclosure-state={isSelected ? "selected" : "resting"} data-hierarchy-kind={hierarchyKind} data-has-children={hasChildren ? "true" : "false"} data-has-parent={hasParent ? "true" : "false"} data-direct-child-count={hasChildren ? children.length : undefined} data-incomplete-child-count={hasChildren ? remainingChildren.length : undefined} onFocusCapture={() => focusTask(entry.task.id)}>
+      <div className={`history-row task-row ${dragState?.taskId === entry.task.id ? "is-dragging" : ""} ${isSelected ? "is-selected" : ""} ${editing ? "is-editing" : ""} ${stateCueClass} ${hierarchyClasses}`} data-row-id={entry.task.id} data-state={entry.task.state} data-disclosure-state={isSelected ? "selected" : "resting"} data-task-identity-palette={identityPaletteIndex} data-hierarchy-kind={hierarchyKind} data-has-children={hasChildren ? "true" : "false"} data-has-parent={hasParent ? "true" : "false"} data-direct-child-count={hasChildren ? children.length : undefined} data-incomplete-child-count={hasChildren ? remainingChildren.length : undefined} onFocusCapture={() => focusTask(entry.task.id)}>
         <HistoryMark entry={entry} range={rangeView} nowMs={displayNowMs} selected={isSelected} ancestryPath={isSelected && entry.depth > 0 ? pathLabel(entry, byId) : undefined} onSelect={selectTask} onFit={fitSelected} />
         <div className={`now-hinge-cell ${isRemaining(entry) && rangeView.endMs < displayNowMs ? "is-discontinuous" : ""}`} aria-hidden="true">{isRemaining(entry) && rangeView.endMs < displayNowMs && <span>▷</span>}</div>
-        <div className={`current-identity ${dragState ? `is-drop-target ${dropValidation?.valid ? "is-valid" : "is-invalid"} ${isCurrentParent ? "is-current" : ""}` : ""}`} data-drop-target={dragState ? `parent:${entry.task.id}` : undefined} data-drop-kind={dragState ? "parent" : undefined} data-drop-parent-id={dragState ? entry.task.id : undefined} data-drop-label={dragState ? dropPlacement.label : undefined} aria-label={dragState ? (dropValidation?.valid ? `${entry.task.title}の子の末尾に配置` : `${entry.task.title}には配置できません: ${dropValidation?.reason ?? "不正な移動先"}`) : undefined} aria-disabled={dragState ? !dropValidation?.valid : undefined} onClick={() => selectTask(entry.task.id)}>
+        <div className={`current-identity ${dragState ? `is-drop-target ${dropValidation?.valid ? "is-valid" : "is-invalid"} ${isCurrentParent ? "is-current" : ""}` : ""}`} data-task-identity-palette={identityPaletteIndex} data-drop-target={dragState ? `parent:${entry.task.id}` : undefined} data-drop-kind={dragState ? "parent" : undefined} data-drop-parent-id={dragState ? entry.task.id : undefined} data-drop-label={dragState ? dropPlacement.label : undefined} aria-label={dragState ? (dropValidation?.valid ? `${entry.task.title}の子の末尾に配置` : `${entry.task.title}には配置できません: ${dropValidation?.reason ?? "不正な移動先"}`) : undefined} aria-disabled={dragState ? !dropValidation?.valid : undefined} onClick={() => selectTask(entry.task.id)}>
           {dragState && isCurrentParent && <span className="identity-drop-cue" aria-hidden="true">{dropValidation?.valid ? `└ ${entry.task.title} の子の末尾` : `⛔ ${dropValidation?.reason ?? "配置できません"}`}</span>}
           {hasParent && <span className={`branch-rail ${isLastVisibleChild ? "is-last-visible-child" : ""}`} aria-hidden="true" style={{ marginLeft: `${depthOffset}px` }} />}
           <button type="button" className="drag-handle" aria-label={`${entry.task.title}をドラッグして移動（EnterまたはSpaceでキーボード配置）`} data-drag-handle="true" data-focus-id={`drag-handle:${entry.task.id}`} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); beginKeyboardMove(entry); } }} onPointerDown={(event) => startPointerDrag(event, entry)} onPointerMove={(event) => updatePointerTarget(event, entry)} onPointerUp={(event) => finishPointerDrag(event, entry)} onPointerCancel={(event) => cancelDrag(entry, event.pointerId)} onLostPointerCapture={() => cancelDrag(entry)} disabled={pending !== null || forest?.truncated}>⠿</button>
           <button type="button" className={`completion-box ${isCompleting ? "is-pending" : ""}`} data-completion-state={isCompleting ? "pending" : "incomplete"} data-focus-id={`complete:${entry.task.id}`} aria-label={isCompleting ? `${entry.task.title}を完了処理中` : `${entry.task.title}を完了にする`} aria-busy={isCompleting ? "true" : undefined} onClick={() => void complete(entry)} disabled={pending !== null}><span className={`completion-glyph ${isCompleting ? "is-processing" : "is-empty"}`} aria-hidden="true">{isCompleting ? "…" : null}</span><span className="completion-intent" aria-hidden="true">{isCompleting ? "完了処理中" : "完了"}</span></button>
           <div className={`task-copy ${hasChildren ? "has-disclosure" : "no-disclosure"} ${childLeafInset === undefined ? "" : "is-child-leaf"}`} style={childLeafInset === undefined ? undefined : { "--leaf-title-inset": `${childLeafInset}px`, paddingLeft: `${childLeafInset}px` } as CSSProperties}>
             {children.length > 0 && <button type="button" className="disclosure" aria-label={`${entry.task.title}を${isCollapsed ? "展開" : "折りたたむ"}`} aria-expanded={!isCollapsed} onClick={() => toggleCollapse(entry.task.id)}>{isCollapsed ? "▸" : "▾"}</button>}
-            {editing ? <form ref={renameFormRef} className="rename-form" onBlur={(event) => { const next = event.relatedTarget; if (next instanceof Node && event.currentTarget.contains(next)) return; requestOutsideRename(entry, editingTitleRef.current); }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTaskId(null); } }} onSubmit={(event) => { event.preventDefault(); void saveRename(entry); }}><input id={`task-label-${entry.task.id}`} aria-label={`${entry.task.title}の名前を変更`} defaultValue={entry.task.title} onChange={(event) => { editingTitleRef.current = event.currentTarget.value; }} autoFocus maxLength={240} /><button type="submit" disabled={pending !== null}>保存</button><button type="button" onClick={() => setEditingTaskId(null)}>取消</button></form> : <button id={`task-label-${entry.task.id}`} type="button" className="task-title" data-focus-id={`title:${entry.task.id}`} onDoubleClick={() => beginRename(entry)} onClick={() => beginRename(entry)}>{entry.task.title}</button>}
-            <span id={taskMetaId} className="task-meta sr-only"><span className={`state-dot state-${entry.task.state}`} aria-hidden="true" />{stateLabel(entry.task.state)}{hasChildren && <span className="child-count" data-child-count={children.length} data-incomplete-child-count={remainingChildren.length}>子{children.length}・未完了{remainingChildren.length}</span>}{isSelected && <span className={`memo-presence ${entry.task.memo ? "has-memo" : "is-empty"}`} data-memo-presence={entry.task.memo ? "present" : "empty"} title={entry.task.memo ? "メモあり" : "メモなし"}><span aria-hidden="true">{entry.task.memo ? "▣" : "□"}</span><span className="sr-only">{entry.task.memo ? "メモあり" : "メモなし"}</span></span>}</span>
+            {editing ? <form ref={renameFormRef} className="rename-form" onBlur={(event) => { const next = event.relatedTarget; if (next instanceof Node && event.currentTarget.contains(next)) return; requestOutsideRename(entry, editingTitleRef.current); }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTaskId(null); } }} onSubmit={(event) => { event.preventDefault(); void saveRename(entry); }}><input id={`task-label-${entry.task.id}`} aria-label={`${entry.task.title}の名前を変更`} defaultValue={entry.task.title} onChange={(event) => { editingTitleRef.current = event.currentTarget.value; }} autoFocus maxLength={240} /><button type="submit" disabled={pending !== null}>保存</button><button type="button" onClick={() => setEditingTaskId(null)}>取消</button>{memoPresence.showMemoPresence && <MemoPresenceMark />}</form> : <button id={`task-label-${entry.task.id}`} type="button" className={`task-title ${memoPresence.showMemoPresence ? "has-memo" : ""}`} data-focus-id={`title:${entry.task.id}`} onDoubleClick={() => beginRename(entry)} onClick={() => beginRename(entry)}>{entry.task.title}{memoPresence.showMemoPresence && <MemoPresenceMark />}</button>}
+            <span id={taskMetaId} className="task-meta sr-only"><span className={`state-dot state-${entry.task.state}`} aria-hidden="true" />{stateLabel(entry.task.state)}{hasChildren && <span className="child-count" data-child-count={children.length} data-incomplete-child-count={remainingChildren.length}>子{children.length}・未完了{remainingChildren.length}</span>}</span>
           </div>
           <div className={`row-actions ${isSelected ? "is-disclosed" : ""} ${editing ? "is-suppressed" : ""}`} aria-hidden={editing || undefined}>
             <button type="button" className="quiet-action memo-action" data-focus-id={`memo:${entry.task.id}`} aria-label={`${entry.task.title}のメモを編集`} tabIndex={isSelected ? 0 : -1} onClick={() => openMemo(entry)} disabled={pending !== null}>メモ</button>
@@ -2080,8 +2125,8 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
 
   return <div className="app-shell" data-preview={previewVariant ?? "tauri"}>
     {previewVariant && <p className="preview-strip" role="note">プレビュー: {previewVariant}</p>}
-    <main className="work-surface" aria-hidden={memoEditor ? true : undefined} onKeyDown={handleMainKeyDown}>
-      <header className="compact-topline">
+    <main ref={workSurfaceRef} className="work-surface" aria-hidden={memoEditor ? true : undefined} onKeyDown={handleMainKeyDown}>
+      <header ref={compactToplineRef} className="compact-topline">
         <div className="now-label sr-only"><span className="now-kicker">NOW</span><span className="now-count">{forest ? remainingCount : "…"}</span><span className="now-caption">残っている仕事</span></div>
         <TopCreateForm disabled={pending !== null} onSubmit={submitTopLevel} />
         <div className="range-controls" aria-label="ライフタイム時間軸の表示範囲">
@@ -2113,7 +2158,7 @@ export default function App({ api: injectedApi, updateApi: injectedUpdateApi, cu
         <section ref={historySurfaceRef} className="history-surface" aria-labelledby="remaining-title">
           <h1 id="remaining-title" className="sr-only">NOW 残っている仕事</h1>
           <div ref={historyCompositeRef} className="history-composite" role="tree" tabIndex={0} aria-activedescendant={activeHistoryDescendantId} onKeyDown={handleHistoryKeyDown}>
-            <TimelineRuler range={rangeView} nowMs={displayNowMs} remainingCount={remainingCount} completedCount={completedEntries.length} onCurrentJump={jumpCurrent} onHistoryJump={jumpHistory} />
+            <TimelineRuler range={rangeView} nowMs={displayNowMs} remainingCount={remainingCount} completedCount={completedEntries.length} onCurrentJump={jumpCurrent} onHistoryJump={jumpHistory} rulerRef={timelineRulerRef} />
             <p className="range-legend sr-only" aria-label="作成から現在または完了までの記録。作業時間・進捗率・予定ではありません">作成から現在／完了までの記録 · 作業時間・進捗率・予定ではありません</p>
             <p className="history-help sr-only">履歴を選ぶと、その直下に正確な時刻と操作を表示します。</p>
             {entries.length === 0 && <div className="history-empty-row"><div className="history-empty-history">履歴はありません</div><div className="now-hinge-cell" aria-hidden="true" /><div className="current-empty"><strong>現在のタスクはありません</strong><span>上の入力欄から追加できます。</span></div></div>}

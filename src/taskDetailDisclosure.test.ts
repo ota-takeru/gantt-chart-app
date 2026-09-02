@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   projectTaskDetailDisclosure,
+  projectTaskMemoPresence,
   transitionTaskDetailDisclosure,
   type TaskDetailDisclosureProjection,
   type TaskDetailDisclosureState,
@@ -152,5 +153,61 @@ describe("task-detail-disclosure contract", () => {
     expect(denseState).toEqual({ selectedTaskId: "task-4999" });
     expect(projectTaskDetailDisclosure(denseState, "task-4999", denseTaskIds)).toEqual(selectedProjection());
     expect(projectTaskDetailDisclosure(denseState, "task-0", denseTaskIds)).toEqual(restingProjection());
+  });
+
+  it("1.2 projects only memo presence from the boolean summary", () => {
+    const withMemo = projectTaskMemoPresence(true);
+    const withoutMemo = projectTaskMemoPresence(false);
+
+    expect(withMemo).toEqual({ showMemoPresence: true });
+    expect(withoutMemo).toEqual({ showMemoPresence: false });
+    expect(Object.keys(withMemo)).toEqual(["showMemoPresence"]);
+    expect(Object.keys(withoutMemo)).toEqual(["showMemoPresence"]);
+    expect(JSON.stringify(withMemo)).not.toContain("本文");
+    expect(JSON.stringify(withoutMemo)).not.toContain("本文");
+  });
+
+  it("1.2 keeps memo presence independent of disclosure selection", () => {
+    const resting = transitionTaskDetailDisclosure({}, { type: "reset" }, availableTaskIds);
+    const selected = transitionTaskDetailDisclosure(
+      {},
+      { type: "select", taskId: "task-b" },
+      availableTaskIds,
+    );
+    const restingCombinedProjection = {
+      detail: projectTaskDetailDisclosure(resting, "task-b", availableTaskIds),
+      memo: projectTaskMemoPresence(true),
+    };
+    const selectedCombinedProjection = {
+      detail: projectTaskDetailDisclosure(selected, "task-b", availableTaskIds),
+      memo: projectTaskMemoPresence(true),
+    };
+
+    expect(resting).toEqual({});
+    expect(selected).toEqual({ selectedTaskId: "task-b" });
+    expect(restingCombinedProjection).toEqual({
+      detail: restingProjection(),
+      memo: { showMemoPresence: true },
+    });
+    expect(selectedCombinedProjection).toEqual({
+      detail: selectedProjection(),
+      memo: { showMemoPresence: true },
+    });
+    expect(restingCombinedProjection.detail).not.toEqual(selectedCombinedProjection.detail);
+    expect(restingCombinedProjection.memo).toEqual(selectedCombinedProjection.memo);
+  });
+
+  it("1.2 projects 5,000 task summaries without retaining per-task state", () => {
+    const densePresence = Array.from({ length: 5_000 }, (_, index) =>
+      projectTaskMemoPresence(index % 2 === 0).showMemoPresence,
+    );
+
+    expect(densePresence).toHaveLength(5_000);
+    expect(densePresence[0]).toBe(true);
+    expect(densePresence[1]).toBe(false);
+    expect(densePresence[4_998]).toBe(true);
+    expect(densePresence[4_999]).toBe(false);
+    expect(projectTaskMemoPresence(false)).toEqual({ showMemoPresence: false });
+    expect(projectTaskMemoPresence(true)).toEqual({ showMemoPresence: true });
   });
 });

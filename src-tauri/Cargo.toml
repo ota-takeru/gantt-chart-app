@@ -1,6 +1,6 @@
 [package]
 name = "gantt-chart-app"
-version = "0.5.0"
+version = "0.6.0"
 description = "A customizable Gantt chart task manager"
 authors = ["Gantt Chart App"]
 edition = "2021"

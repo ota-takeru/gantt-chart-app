@@ -1121,7 +1121,7 @@ describe("history-left / NOW-right surface", () => {
     renderPreview("typical");
     await ready();
     expect(getComputedStyle(timelineRuler()).position).toBe("sticky");
-    expect(getComputedStyle(timelineRuler()).scrollMarginTop).toBe("56px");
+    expect(getComputedStyle(timelineRuler()).scrollMarginTop).toBe("var(--sticky-scroll-offset)");
 
     const row = rowFor("明日の調査メモを残す");
     const actions = row.querySelector(".row-actions") as HTMLElement;

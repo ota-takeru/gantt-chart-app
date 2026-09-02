@@ -34,6 +34,11 @@ export interface TaskDetailDisclosureProjection {
   readonly stableSelectionLink: boolean;
 }
 
+export interface TaskMemoPresenceProjection {
+  /** Whether a non-empty memo is available for passive presentation. */
+  readonly showMemoPresence: boolean;
+}
+
 /**
  * Apply one disclosure intent without mutating task data or retaining state
  * for individual tasks.
@@ -94,4 +99,12 @@ export function projectTaskDetailDisclosure(
     secondaryActions: isStableSelection,
     stableSelectionLink: isStableSelection,
   };
+}
+
+/**
+ * Project memo presence from the caller's boolean summary without exposing
+ * memo text or retaining any task-specific state.
+ */
+export function projectTaskMemoPresence(hasMemo: boolean): TaskMemoPresenceProjection {
+  return { showMemoPresence: hasMemo };
 }

@@ -140,6 +140,20 @@ Use this compact request shape:
 
 Explicit authorization permits the requested change; it does not permit weakening coverage or making unrelated edits. Existing tests must continue to express the behavior that remains supported.
 
+### Language and approval presentation
+
+The compact schema is a content checklist, not a requirement to present English headings to the user. Write the stored request and the user-facing summary in the user's language. Preserve exact capability IDs, versions, test names, and error codes where needed, and explain them briefly in ordinary language.
+
+An approval checkpoint must be understandable without opening the request file. State:
+
+1. what the current locked behavior is;
+2. what observable behavior would change;
+3. what will deliberately remain unchanged;
+4. why explicit approval is needed; and
+5. the exact short reply that authorizes the scoped change.
+
+Avoid leading with terms such as “CCR”, “semantic change”, or “headless projection”. If those terms are useful for traceability, introduce them after the plain-language explanation.
+
 ## Example: task reassignment
 
 This is a concise example of a capability contract. It intentionally leaves the UI mechanism open.
@@ -235,4 +249,3 @@ getTaskAssignmentHistory(taskId) -> AssignmentHistory
 - Invalid target and stale preview produce no partial application.
 - Undo restores the prior current assignment while retaining the audit record.
 ```
-

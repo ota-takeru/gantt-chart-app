@@ -57,6 +57,17 @@
   --landing-shadow: rgba(31, 42, 45, .12);
   --on-accent: #fff;
 
+  /* Task identity accents are presentation-only.  They never encode
+     lifecycle, selection, hierarchy, memo presence, or timeline meaning. */
+  --task-identity-accent-0: #2a6f68;
+  --task-identity-accent-1: #8c4a3b;
+  --task-identity-accent-2: #5b5d9a;
+  --task-identity-accent-3: #8b6c26;
+  --task-identity-accent-4: #3b7f61;
+  --task-identity-accent-5: #7b4c87;
+  --task-identity-accent-6: #2f6f8f;
+  --task-identity-accent-7: #9a5e2b;
+
   /* Direction A line ownership: ordinary rows carry the least ink; time,
      hierarchy, and the NOW hinge each have a distinct structural role. */
   --row-line: #e7ece8;
@@ -95,11 +106,32 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 button:disabled { cursor: not-allowed; opacity: .52; }
 
 .app-shell { min-height: 100vh; }
-.work-surface { width: calc(100% - 32px); max-width: none; margin: 0 auto; padding: 16px 0 64px; }
+.work-surface {
+  --compact-topline-height: 48px;
+  --timeline-ruler-height: 48px;
+  --sticky-scroll-offset: calc(var(--compact-topline-height) + var(--timeline-ruler-height));
+  width: calc(100% - 32px);
+  max-width: none;
+  margin: 0 auto;
+  padding: 16px 0 64px;
+}
 
 .preview-strip { margin: 0 0 10px; padding: 6px 10px; border: 1px solid var(--warning-border); background: var(--warning-surface); color: var(--warning); font-size: 12px; }
 
-.compact-topline { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-height: 48px; padding: 6px 0 12px; border-bottom: 1px solid var(--ink); }
+.compact-topline {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  min-height: 48px;
+  border-bottom: 1px solid var(--ink);
+  background: var(--paper);
+  padding: 6px 0 12px;
+  box-shadow: 0 2px 0 var(--surface-shadow);
+}
 .now-label { display: flex; align-items: baseline; gap: 8px; min-width: 195px; }
 .now-kicker { color: var(--accent); font-size: 20px; font-weight: 800; letter-spacing: .13em; }
 .now-count { min-width: 1.7em; color: var(--muted); font-size: 16px; font-variant-numeric: tabular-nums; }
@@ -383,6 +415,45 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .identity-drop-cue { position: absolute; z-index: 5; top: -18px; right: 4px; left: 4px; overflow: hidden; border-bottom: 1px solid currentColor; padding: 1px 5px; color: var(--accent); font-size: 10px; line-height: 15px; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; }
 .current-identity.is-drop-target.is-invalid .identity-drop-cue { color: var(--danger); }
 
+/* Direction A identity accents are keyed by immutable task id.  The custom
+   property makes the identity channel explicit while leaving row, timeline,
+   NOW, lifecycle, hierarchy, selection, and memo paint roles independent. */
+[data-task-identity-palette="0"] { --task-identity-accent: var(--task-identity-accent-0); }
+[data-task-identity-palette="1"] { --task-identity-accent: var(--task-identity-accent-1); }
+[data-task-identity-palette="2"] { --task-identity-accent: var(--task-identity-accent-2); }
+[data-task-identity-palette="3"] { --task-identity-accent: var(--task-identity-accent-3); }
+[data-task-identity-palette="4"] { --task-identity-accent: var(--task-identity-accent-4); }
+[data-task-identity-palette="5"] { --task-identity-accent: var(--task-identity-accent-5); }
+[data-task-identity-palette="6"] { --task-identity-accent: var(--task-identity-accent-6); }
+[data-task-identity-palette="7"] { --task-identity-accent: var(--task-identity-accent-7); }
+.current-identity[data-task-identity-palette]::before {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 4px;
+  background: var(--task-identity-accent);
+  content: "";
+  pointer-events: none;
+}
+.history-pocket .pocket-caption[data-task-identity-palette] .pocket-caption-title {
+  position: relative;
+  display: inline-block;
+  padding-left: 5px;
+}
+.history-pocket .pocket-caption[data-task-identity-palette] .pocket-caption-title::before,
+.pocket-member-title[data-task-identity-palette]::before {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  left: 0;
+  width: 3px;
+  background: var(--task-identity-accent);
+  content: "";
+  pointer-events: none;
+}
+
 @media (max-width: 760px) {
   .drop-seam span { right: 8px; left: 50px; }
 }
@@ -454,17 +525,17 @@ button:disabled { cursor: not-allowed; opacity: .52; }
    scroll, and make the two high-value jumps compact but fully named. */
 .timeline-ruler {
   position: sticky;
-  top: 0;
+  top: var(--compact-topline-height);
   z-index: 12;
   background: var(--paper);
   box-shadow: 0 1px 0 var(--ink);
-  scroll-margin-top: 56px;
+  scroll-margin-top: var(--sticky-scroll-offset);
 }
 .ruler-jumps { display: flex; align-items: center; gap: 3px; margin-left: auto; }
 .ruler-jump { min-height: 24px; border: 1px solid var(--line); background: transparent; padding: 2px 5px; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 1.1; cursor: pointer; white-space: nowrap; }
 .ruler-jump:hover:not(:disabled), .ruler-jump:focus-visible { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
 .ruler-jump:disabled { cursor: not-allowed; }
-.history-surface, .history-row, .history-pocket, .pocket-mark, [data-history-mark], [id^="history-task-"], [id^="history-member-row-"] { scroll-margin-top: 56px; }
+.history-surface, .history-row, .history-pocket, .pocket-caption, .pocket-mark, [data-history-mark], [id^="history-task-"], [id^="history-member-row-"], [id^="history-pocket-caption-"] { scroll-margin-top: var(--sticky-scroll-offset); }
 
 /* The auxiliary labels remain in the accessibility tree but do not compete
    with the ruler, NOW identity, or primary task title at normal density. */
@@ -760,6 +831,14 @@ button:disabled { cursor: not-allowed; opacity: .52; }
     --surface-shadow: rgba(0, 0, 0, .45);
     --landing-shadow: rgba(0, 0, 0, .35);
     --on-accent: #0e1214;
+    --task-identity-accent-0: #62d3c5;
+    --task-identity-accent-1: #e58c7d;
+    --task-identity-accent-2: #aab2ff;
+    --task-identity-accent-3: #e1bb6d;
+    --task-identity-accent-4: #7fd4a4;
+    --task-identity-accent-5: #d29de5;
+    --task-identity-accent-6: #8ecdf2;
+    --task-identity-accent-7: #f2a16e;
     --row-line: #29383b;
     --temporal-line: #708c88;
     --hierarchy-line: #5d7772;
@@ -775,6 +854,9 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 }
 
 @media (forced-colors: active) {
+  .current-identity[data-task-identity-palette]::before,
+  .history-pocket .pocket-caption[data-task-identity-palette] .pocket-caption-title::before,
+  .pocket-member-title[data-task-identity-palette]::before { display: none; }
   .history-row:hover .current-identity:not(.is-drop-target),
   .history-row:focus-within .current-identity:not(.is-drop-target),
   .history-row.is-selected .current-identity:not(.is-drop-target) { background: Canvas; box-shadow: inset 0 1px 0 ButtonText, inset 0 -1px 0 ButtonText; }
@@ -799,6 +881,24 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .memo-presence { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; border: 1px solid var(--line); background: var(--paper); padding: 1px 3px; color: var(--muted); font-size: 10px; line-height: 1.1; }
 .memo-presence.has-memo { border-style: double; border-color: var(--accent); color: var(--ink); font-weight: 800; }
 .memo-presence.is-empty { border-style: dashed; }
+
+/* Memo presence is a passive, title-adjacent cue.  Reserve its small slot
+   inside the title control so the marker stays visible without changing the
+   fixed 46px task-row geometry or the action overlay footprint. */
+.history-row.task-row .task-title.has-memo { position: relative; padding-right: 28px; }
+.history-row.task-row .task-title.has-memo > .memo-presence { position: absolute; top: 50%; right: 2px; transform: translateY(-50%); }
+.history-row.task-row .rename-form > .memo-presence { flex: 0 0 auto; }
+
+/* Expanded completed members keep the same marker-to-title relationship in
+   their compact lane.  The title padding ensures the marker survives
+   ellipsis at narrow widths. */
+.pocket-member-title.has-memo { padding-right: 27px; }
+.pocket-member-title.has-memo > .memo-presence { position: absolute; top: 50%; right: 3px; transform: translateY(-50%); }
+
+/* Completed detail titles remain a single readable summary line while the
+   passive marker gets its own non-color slot. */
+.history-detail-summary strong { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.history-detail-summary strong > .memo-presence { flex: 0 0 auto; }
 .memo-action { border-style: dashed; }
 .memo-action:hover:not(:disabled), .memo-action:focus-visible { border-color: var(--accent); color: var(--accent); }
 .current-identity { padding-right: 8px; }

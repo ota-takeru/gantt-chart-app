@@ -23,6 +23,14 @@ Use this skill to make the domain behavior stable before UI mechanisms are chose
 6. Implement the selected UI through adapters that bind to the locked headless capability. The UI implementer works only from the selected design artifact and locked capability; it may be another bounded implementation agent, but it may not edit locked specifications, core behavior, or existing contract tests. Do not add extra agents for tiny visual-only changes. Read [integration-gate.md](references/integration-gate.md) before this step.
 7. Run the integration gate: existing and new contract tests, interaction coverage for states and errors, representative visual rendering at realistic scale, and relevant accessibility/keyboard checks. If the selected design requires missing behavior, stop and issue a Capability Change Request rather than changing the contract implicitly.
 
+## User-facing communication
+
+- Write explanations, approval requests, and change-request documents in the user's language unless the user asks otherwise.
+- Prefer ordinary product language over workflow jargon. On first use, explain unavoidable terms such as “locked capability” or “Capability Change Request” in one short phrase.
+- Never make the user infer the decision from an internal document. Before asking for approval, summarize in plain language: what the current behavior guarantees, what the request would change, why explicit approval is required, and what work will follow approval.
+- End an approval checkpoint with one concrete sentence the user can reply with. Do not require the user to understand an English template or inspect a repository file before deciding.
+- Keep stable technical identifiers, version numbers, and error codes unchanged when precision requires them, but pair them with a readable explanation.
+
 ## Non-negotiable boundaries
 
 - Design exploration may choose representation and interaction, but it may not redefine the locked capability.
